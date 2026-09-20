@@ -15,9 +15,10 @@ from PySide6.QtGui import (QBrush, QColor, QConicalGradient, QCursor,
     QFont, QFontDatabase, QGradient, QIcon,
     QImage, QKeySequence, QLinearGradient, QPainter,
     QPalette, QPixmap, QRadialGradient, QTransform)
-from PySide6.QtWidgets import (QApplication, QComboBox, QLabel, QLineEdit,
-    QMainWindow, QMenuBar, QPushButton, QSizePolicy,
-    QStatusBar, QTabWidget, QTextEdit, QWidget)
+from PySide6.QtWidgets import (QApplication, QComboBox, QHeaderView, QLabel,
+    QLineEdit, QMainWindow, QMenuBar, QPushButton,
+    QSizePolicy, QSpinBox, QStatusBar, QTabWidget,
+    QTableWidget, QTableWidgetItem, QTextEdit, QWidget)
 
 class Ui_MainWindow(object):
     def setupUi(self, MainWindow):
@@ -64,7 +65,28 @@ class Ui_MainWindow(object):
         self.btn_pause = QPushButton(self.tab_plots)
         self.btn_pause.setObjectName(u"btn_pause")
         self.btn_pause.setGeometry(QRect(680, 0, 41, 26))
+        self.lineEdit_muestras = QLineEdit(self.tab_plots)
+        self.lineEdit_muestras.setObjectName(u"lineEdit_muestras")
+        self.lineEdit_muestras.setGeometry(QRect(550, 0, 113, 26))
         self.tabWidget.addTab(self.tab_plots, "")
+        self.curve_editor = QWidget()
+        self.curve_editor.setObjectName(u"curve_editor")
+        self.tableWidget = QTableWidget(self.curve_editor)
+        self.tableWidget.setObjectName(u"tableWidget")
+        self.tableWidget.setGeometry(QRect(50, 10, 591, 241))
+        self.spinBoxCurveID = QSpinBox(self.curve_editor)
+        self.spinBoxCurveID.setObjectName(u"spinBoxCurveID")
+        self.spinBoxCurveID.setGeometry(QRect(680, 20, 77, 26))
+        self.btnAgregarFila = QPushButton(self.curve_editor)
+        self.btnAgregarFila.setObjectName(u"btnAgregarFila")
+        self.btnAgregarFila.setGeometry(QRect(680, 60, 81, 26))
+        self.btnEliminarFila = QPushButton(self.curve_editor)
+        self.btnEliminarFila.setObjectName(u"btnEliminarFila")
+        self.btnEliminarFila.setGeometry(QRect(690, 100, 81, 26))
+        self.pushButton_4 = QPushButton(self.curve_editor)
+        self.pushButton_4.setObjectName(u"pushButton_4")
+        self.pushButton_4.setGeometry(QRect(700, 140, 81, 26))
+        self.tabWidget.addTab(self.curve_editor, "")
         MainWindow.setCentralWidget(self.centralwidget)
         self.menubar = QMenuBar(MainWindow)
         self.menubar.setObjectName(u"menubar")
@@ -76,7 +98,7 @@ class Ui_MainWindow(object):
 
         self.retranslateUi(MainWindow)
 
-        self.tabWidget.setCurrentIndex(1)
+        self.tabWidget.setCurrentIndex(2)
 
 
         QMetaObject.connectSlotsByName(MainWindow)
@@ -91,5 +113,9 @@ class Ui_MainWindow(object):
         self.tabWidget.setTabText(self.tabWidget.indexOf(self.tab_terminal), QCoreApplication.translate("MainWindow", u"Comunicacion", None))
         self.btn_pause.setText(QCoreApplication.translate("MainWindow", u"Stop", None))
         self.tabWidget.setTabText(self.tabWidget.indexOf(self.tab_plots), QCoreApplication.translate("MainWindow", u"Graficos", None))
+        self.btnAgregarFila.setText(QCoreApplication.translate("MainWindow", u"Agregar fila", None))
+        self.btnEliminarFila.setText(QCoreApplication.translate("MainWindow", u"Eliminar fila", None))
+        self.pushButton_4.setText(QCoreApplication.translate("MainWindow", u"Enviar", None))
+        self.tabWidget.setTabText(self.tabWidget.indexOf(self.curve_editor), QCoreApplication.translate("MainWindow", u"Curvas", None))
     # retranslateUi
 
