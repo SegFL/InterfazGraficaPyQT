@@ -2,10 +2,14 @@ import sys
 import serial
 import serial.tools.list_ports
 from collections import deque
-
+import queue
+from curve_sender import CurveSenderThread, verify_and_strip
 import pyqtgraph as pg
 from PySide6.QtCore import QThread, Signal, Slot, QTimer, Qt
 from PySide6.QtGui import QTextCursor
+from PySide6.QtWidgets import QSplitter        # sumar al import existente
+from series_selector import SeriesSelector
+
 from PySide6.QtWidgets import (
     QApplication,
     QMainWindow,
@@ -33,6 +37,8 @@ class SerialReaderThread(QThread):
         self.serial_port = serial_port
         self._is_running = True
         self._rx_buffer = ""
+
+        self.app_queue = queue.Queue()
 
     def run(self):
         while self._is_running and self.serial_port and self.serial_port.is_open:
@@ -73,9 +79,12 @@ class SerialReaderThread(QThread):
 
                         # 2. Menú o texto general para consola
                         else:
+                            if line_str.startswith("2,"):
+                                payload = verify_and_strip(line_str)
+                                if payload is not None:
+                                    self.app_queue.put(payload)
                             if line_str:
                                 self.data_received.emit(line + "\n")
-
             except Exception as e:
                 self.error_occurred.emit(str(e))
                 break
@@ -101,7 +110,7 @@ class MainApp(QMainWindow, Ui_MainWindow):
         self.reader_thread = None
         self.is_paused = False
         self.buffer_size = 200
-
+        self.curve_sender  = None
         self.sensor_styles = {
             0: {"style": Qt.SolidLine, "suffix": "S0 (Solido)"},
             1: {"style": Qt.DashLine, "suffix": "S1 (Punteado)"},
@@ -238,11 +247,10 @@ class MainApp(QMainWindow, Ui_MainWindow):
             "Curva"
         )
 
-        layout = self.curve_editor.layout()
-
+        layout = self.plot_curva_container.layout()
         if layout is None:
-            layout = QVBoxLayout(self.curve_editor)
-
+            layout = QVBoxLayout(self.plot_curva_container)
+        layout.setContentsMargins(0, 0, 0, 0)
         layout.addWidget(self.curve_plot)
                     
     def toggle_pause(self):
@@ -254,18 +262,20 @@ class MainApp(QMainWindow, Ui_MainWindow):
             else:
                 self.btn_pause_widget.setText("Pausar")
                 self.statusbar.showMessage("Gráfico en tiempo real")
+
     def _setup_graph(self):
-        """Configura el PlotWidget con auto-escalado dinámico en Y para todos los ejes."""
+        """Configura el PlotWidget con auto-escalado dinámico en Y para todos los ejes
+        y el selector de series a la derecha."""
         pg.setConfigOptions(antialias=True)
         self.graph_widget = pg.PlotWidget(title="Telemetría de Sensores - Tiempo Real")
         self.graph_widget.setBackground("#0c0c0c")
         self.graph_widget.showGrid(x=True, y=True, alpha=0.3)
         self.graph_widget.setLabel("bottom", "Tiempo", units="s")
         self.graph_widget.addLegend(offset=(10, 10))
-
+ 
         # Eje Principal (Izquierda) -> Tensión
         self.graph_widget.setLabel("left", "Tensión", units="V", color="#00ffff")
-
+ 
         # Eje Adicional 1 (Derecha) -> Corriente
         self.vb2 = pg.ViewBox()
         self.graph_widget.plotItem.scene().addItem(self.vb2)
@@ -273,7 +283,8 @@ class MainApp(QMainWindow, Ui_MainWindow):
         self.graph_widget.plotItem.layout.addItem(axis2, 2, 3)
         axis2.linkToView(self.vb2)
         axis2.setLabel("Corriente", units="mA", color="#ffff00")
-
+        self.axis_i = axis2
+ 
         # Eje Adicional 2 (Derecha exterior) -> Potencia
         self.vb3 = pg.ViewBox()
         self.graph_widget.plotItem.scene().addItem(self.vb3)
@@ -281,31 +292,43 @@ class MainApp(QMainWindow, Ui_MainWindow):
         self.graph_widget.plotItem.layout.addItem(axis3, 2, 4)
         axis3.linkToView(self.vb3)
         axis3.setLabel("Potencia", units="mW", color="#ff00ff")
-
+        self.axis_p = axis3
+ 
         # Sincronización X entre las distintas capas (ViewBoxes)
         self.vb2.setXLink(self.graph_widget.plotItem.vb)
         self.vb3.setXLink(self.graph_widget.plotItem.vb)
-
-        # Habilitar auto-escalado vertical (Eje Y) independiente en cada capa
+ 
+        # Auto-escalado vertical independiente en cada capa
         self.graph_widget.enableAutoRange(axis=pg.ViewBox.YAxis, enable=True)
         self.vb2.enableAutoRange(axis=pg.ViewBox.YAxis, enable=True)
         self.vb3.enableAutoRange(axis=pg.ViewBox.YAxis, enable=True)
-
+ 
         def update_views():
             rect = self.graph_widget.plotItem.vb.sceneBoundingRect()
             self.vb2.setGeometry(rect)
             self.vb2.linkedViewChanged(self.graph_widget.plotItem.vb, self.vb2.XAxis)
-
+ 
             self.vb3.setGeometry(rect)
             self.vb3.linkedViewChanged(self.graph_widget.plotItem.vb, self.vb3.XAxis)
-
+ 
         self.graph_widget.plotItem.vb.sigResized.connect(update_views)
         update_views()
-
+ 
+        # ---- Selector de series (matriz sensor x magnitud) a la derecha ----
+        self.selector = SeriesSelector()
+        self.selector.changed.connect(self.on_series_toggled)
+ 
+        splitter = QSplitter(Qt.Horizontal)
+        splitter.addWidget(self.graph_widget)
+        splitter.addWidget(self.selector)
+        splitter.setStretchFactor(0, 1)
+        splitter.setStretchFactor(1, 0)
+ 
         container_layout = self.layout_plots.layout()
         if container_layout is None:
             container_layout = QVBoxLayout(self.layout_plots)
-        container_layout.addWidget(self.graph_widget)
+        container_layout.addWidget(splitter)
+
 
     @Slot(int, float, float, float, float)
     def store_sensor_data(self, sensor_id, t, v1, v2, v3):
@@ -318,7 +341,7 @@ class MainApp(QMainWindow, Ui_MainWindow):
 
 
     def _get_or_create_sensor(self, sensor_id):
-        """Inicializa dinámicamente las estructuras de datos y curvas usando el buffer_size actual."""
+        """Inicializa dinámicamente las estructuras de datos y curvas del sensor."""
         if sensor_id not in self.sensors_data:
             # Paleta de colores para cada sensor: (Tensión, Corriente, Potencia)
             color_palette = {
@@ -326,43 +349,87 @@ class MainApp(QMainWindow, Ui_MainWindow):
                 1: ("#00ff00", "#ff8800", "#ff0055"),
                 2: ("#3388ff", "#ffcc00", "#cc00ff"),
             }
-
+ 
             c_v, c_i, c_p = color_palette.get(
                 sensor_id, ("#ffffff", "#aaaaaa", "#777777")
             )
-
+ 
             style_cfg = self.sensor_styles.get(
                 sensor_id, {"style": Qt.SolidLine, "suffix": f"S{sensor_id}"}
             )
             line_style = style_cfg["style"]
             suffix = style_cfg["suffix"]
-
+ 
+            names = {
+                "v": f"Tensión - {suffix}",
+                "i": f"Corriente - {suffix}",
+                "p": f"Potencia - {suffix}",
+            }
+ 
             pen_tension = pg.mkPen(color=c_v, width=2, style=line_style)
             pen_corriente = pg.mkPen(color=c_i, width=2, style=line_style)
             pen_potencia = pg.mkPen(color=c_p, width=2, style=line_style)
-
-            # 1. Crear curva de Tensión (Eje Y principal / Izquierda)
-            curve_v = self.graph_widget.plot(pen=pen_tension, name=f"Tensión - {suffix}")
-
-            # 2. Crear curva de Corriente (Eje Y secundario / Derecha 1)
-            curve_i = pg.PlotCurveItem(pen=pen_corriente, name=f"Corriente - {suffix}")
+ 
+            # 1. Tensión (Eje Y principal / Izquierda) -> se registra sola en la leyenda
+            curve_v = self.graph_widget.plot(pen=pen_tension, name=names["v"])
+ 
+            # 2. Corriente (Eje Y secundario / Derecha 1)
+            curve_i = pg.PlotCurveItem(pen=pen_corriente, name=names["i"])
             self.vb2.addItem(curve_i)
-
-            # 3. Crear curva de Potencia (Eje Y terciario / Derecha 2)
-            curve_p = pg.PlotCurveItem(pen=pen_potencia, name=f"Potencia - {suffix}")
+ 
+            # 3. Potencia (Eje Y terciario / Derecha 2)
+            curve_p = pg.PlotCurveItem(pen=pen_potencia, name=names["p"])
             self.vb3.addItem(curve_p)
-
-            # Guardar estructuras con el buffer_size activo
+ 
             self.sensors_data[sensor_id] = {
                 "time": deque(maxlen=10000),
                 "tension": deque(maxlen=10000),
                 "corriente": deque(maxlen=10000),
                 "potencia": deque(maxlen=10000),
                 "curves": {"v": curve_v, "i": curve_i, "p": curve_p},
+                "names": names,
             }
-
+ 
+            # Registrar en la matriz de checks y aplicar la selección vigente
+            self.selector.add_sensor(sensor_id)
+            for m in ("v", "i", "p"):
+                self.apply_series_visibility(sensor_id, m)
+ 
         return self.sensors_data[sensor_id]
-        
+
+
+    @Slot(int, str, bool)
+    def on_series_toggled(self, sensor_id, mag, visible):
+        self.apply_series_visibility(sensor_id, mag)
+ 
+    def apply_series_visibility(self, sensor_id, mag):
+        """Muestra/oculta una serie y sincroniza leyenda y ejes."""
+        s = self.sensors_data.get(sensor_id)
+        if s is None:
+            return
+        curve = s["curves"][mag]
+        legend = self.graph_widget.plotItem.legend
+        visible = self.selector.is_visible(sensor_id, mag)
+ 
+        curve.setVisible(visible)
+        legend.removeItem(curve)                  # evita entradas duplicadas
+        if visible:
+            legend.addItem(curve, s["names"][mag])
+        self._update_axes_visibility()
+ 
+    def _update_axes_visibility(self):
+        """Oculta el eje de una magnitud si no hay ninguna serie visible."""
+        axes = {
+            "v": self.graph_widget.getAxis("left"),
+            "i": self.axis_i,
+            "p": self.axis_p,
+        }
+        for mag, axis in axes.items():
+            axis.setVisible(
+                any(self.selector.is_visible(sid, mag) for sid in self.sensors_data)
+            )
+
+ 
     def on_muestras_changed(self):
         print("CAMBIO DE MUESTRAS:", self.input_muestras.text())
         """Actualiza la cantidad de muestras visibles."""
@@ -392,46 +459,39 @@ class MainApp(QMainWindow, Ui_MainWindow):
         # Si el valor no es válido, volver al valor anterior
         self.input_muestras.setText(str(self.buffer_size))
 
+
+
     def update_plot(self):
-        """Actualiza las curvas mostrando solamente las últimas buffer_size muestras."""
+        """Actualiza solo las curvas visibles con las últimas buffer_size muestras."""
         if self.is_paused or not self.sensors_data:
             return
-
+ 
         global_t_min = float("inf")
         global_t_max = float("-inf")
         has_data = False
-
+ 
         for s_id, s in self.sensors_data.items():
-
+ 
             if len(s["time"]) < 1:
                 continue
-
+ 
             has_data = True
-
-            # Tomar solamente las últimas buffer_size muestras
+ 
             times = list(s["time"])[-self.buffer_size:]
-            v_data = list(s["tension"])[-self.buffer_size:]
-            i_data = list(s["corriente"])[-self.buffer_size:]
-            p_data = list(s["potencia"])[-self.buffer_size:]
-
-            # Actualizar curvas
-            s["curves"]["v"].setData(times, v_data)
-            s["curves"]["i"].setData(times, i_data)
-            s["curves"]["p"].setData(times, p_data)
-
-            # Rango temporal mostrado
+            series = {"v": s["tension"], "i": s["corriente"], "p": s["potencia"]}
+ 
+            for mag, buf in series.items():
+                if self.selector.is_visible(s_id, mag):
+                    s["curves"][mag].setData(times, list(buf)[-self.buffer_size:])
+ 
             if len(times) > 0:
                 global_t_min = min(global_t_min, times[0])
                 global_t_max = max(global_t_max, times[-1])
-
-        # Ajustar eje X exactamente a las muestras mostradas
+ 
         if has_data and global_t_max > global_t_min:
-            self.graph_widget.setXRange(
-                global_t_min,
-                global_t_max,
-                padding=0
-            )
+            self.graph_widget.setXRange(global_t_min, global_t_max, padding=0)
 
+ 
                     
     def refresh_ports(self):
         self.comboBox.clear()
@@ -454,19 +514,24 @@ class MainApp(QMainWindow, Ui_MainWindow):
         if not port_name:
             self.statusbar.showMessage("Error: No hay puerto seleccionado.")
             return
-
+ 
         baud_text = self.comboBox_2.currentText()
         baud_rate = int(baud_text) if baud_text.isdigit() else 115200
-
+ 
         try:
-            for s_id, s in self.sensors_data.items():
-                s["curves"]["v"].clear()
-                s["curves"]["i"].clear()
-                s["curves"]["p"].clear()
+            # Quitar realmente las curvas anteriores del plot y de la leyenda
+            legend = self.graph_widget.plotItem.legend
+            for s in self.sensors_data.values():
+                c = s["curves"]
+                self.graph_widget.removeItem(c["v"])
+                self.vb2.removeItem(c["i"])
+                self.vb3.removeItem(c["p"])
+                for curve in c.values():
+                    legend.removeItem(curve)
             self.sensors_data.clear()
-
+ 
             self.serial_port = serial.Serial(port_name, baud_rate, timeout=0.1)
-
+ 
             self.reader_thread = SerialReaderThread(self.serial_port)
             self.reader_thread.data_received.connect(self.append_text)
             self.reader_thread.parsed_data_received.connect(
@@ -474,20 +539,25 @@ class MainApp(QMainWindow, Ui_MainWindow):
             )
             self.reader_thread.error_occurred.connect(self.handle_error)
             self.reader_thread.start()
-
+ 
             self.btnIniciar.setText("Desconectar")
             self.comboBox.setEnabled(False)
             self.comboBox_2.setEnabled(False)
             self.btn_refresh.setEnabled(False)
-
+ 
             self.statusbar.showMessage(
                 f"Conectado a {port_name} @ {baud_rate} bps"
             )
-
+ 
         except Exception as e:
             self.statusbar.showMessage(f"Error al abrir {port_name}: {e}")
 
+
+            
     def disconnect_serial(self):
+        if self.curve_sender  and self.curve_sender .isRunning():
+            self.curve_sender .wait(3000)
+        
         if self.reader_thread:
             self.reader_thread.stop()
             self.reader_thread = None
@@ -549,7 +619,7 @@ class MainApp(QMainWindow, Ui_MainWindow):
             if valor < 0:
                 return False, f"Valor inválido en fila {i + 1}."
 
-            if tipo not in ("STEP", "LINEAR", "S_CURVE"):
+            if tipo not in ("STEP", "LINEAR"):
                 return False, f"Tipo inválido en fila {i + 1}."
 
             if tiempo <= previous_time:
@@ -584,101 +654,78 @@ class MainApp(QMainWindow, Ui_MainWindow):
             symbol="o",
             symbolSize=7
         )
-
+            
     def generate_curve_data(self):
-
         points = []
-
         for row in range(self.tableCurva.rowCount()):
-
             time_item = self.tableCurva.item(row, 0)
             value_item = self.tableCurva.item(row, 1)
             type_widget = self.tableCurva.cellWidget(row, 2)
-
             if time_item is None or value_item is None or type_widget is None:
                 continue
-
             try:
                 t = float(time_item.text())
-                value = float(value_item.text())
+                v = float(value_item.text())
             except ValueError:
                 continue
+            points.append((t, v, type_widget.currentText()))
 
-            curve_type = type_widget.currentText()
-
-            points.append((t, value, curve_type))
-
-        # Ordenar por tiempo
-        points.sort(key=lambda x: x[0])
-
-        if len(points) == 0:
+        points.sort(key=lambda p: p[0])
+        if not points:
             return [], []
-
         if len(points) == 1:
             return [points[0][0]], [points[0][1]]
 
-        x = []
-        y = []
-
-        for i in range(len(points) - 1):
-
+        # Semántica del firmware: el tipo de points[i] define cómo se LLEGA a él.
+        x, y = [points[0][0]], [points[0][1]]
+        for i in range(1, len(points)):
+            t0, v0, _ = points[i - 1]
             t1, v1, tipo = points[i]
-            t2, v2, _ = points[i + 1]
-
-            if t2 <= t1:
+            if t1 <= t0:
                 continue
-
-            if tipo == "STEP":
-
-                # Valor constante hasta el próximo punto
-                x.extend([
-                    t1,
-                    t2
-                ])
-
-                y.extend([
-                    v1,
-                    v1
-                ])
-
-            elif tipo == "LINEAR":
-
-                # Recta entre los dos puntos
-                x.extend([
-                    t1,
-                    t2
-                ])
-
-                y.extend([
-                    v1,
-                    v2
-                ])
-
-        # Agregar el último punto
-        x.append(points[-1][0])
-        y.append(points[-1][1])
-
+            if tipo == "LINEAR":
+                x.append(t1); y.append(v1)               # rampa
+            else:                                        # STEP (y S_CURVE, sin implementar)
+                x.extend([t1, t1]); y.extend([v0, v1])   # mantiene v0 y salta en t1
         return x, y
+
     def send_curve(self):
+        if not (self.serial_port and self.serial_port.is_open and self.reader_thread):
+            self.statusbar.showMessage("Puerto serie no conectado")
+            return
+        if self.curve_sender and self.curve_sender.isRunning():
+            self.statusbar.showMessage("Ya hay un envío en curso")
+            return
 
         try:
             data = self.get_curve_data()
         except ValueError as e:
-            self.statusbar.showMessage(str(e))
+            self.statusbar.showMessage(f"Datos inválidos (tiempo y valor deben ser enteros): {e}")
             return
 
         valid, error = self.validate_curve_data(data)
-
         if not valid:
             self.statusbar.showMessage(error)
             return
 
-        curve_id = self.spinBoxCurveID.value()
+        self.curve_sender  = CurveSenderThread(
+            self.serial_port,
+            self.reader_thread.app_queue,
+            self.spinBoxCurveID.value(),
+            data,
+        )
+        self.curve_sender .progress.connect(self.statusbar.showMessage)
+        self.curve_sender .result.connect(self.on_curve_sent)
+        self.curve_sender .finished.connect(lambda: self.btnEnviarCurva.setEnabled(True))
+        self.btnEnviarCurva.setEnabled(False)
+        self.curve_sender .start()
 
-        print("ID:", curve_id)
-        print("CURVA:", data)
+    @Slot(bool, str)
+    def on_curve_sent(self, ok, msg):
+        self.statusbar.showMessage(("✔ " if ok else "✘ ") + msg)
+        self.append_text(f"[CURVA] {msg}\n")
 
-
+        
     def send_data(self):
         if self.serial_port and self.serial_port.is_open and self.input_send_widget:
             text = self.input_send_widget.text()
