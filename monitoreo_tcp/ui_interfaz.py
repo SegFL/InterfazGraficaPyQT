@@ -83,9 +83,9 @@ class Ui_MainWindow(object):
         self.btnEliminarFila = QPushButton(self.curve_editor)
         self.btnEliminarFila.setObjectName(u"btnEliminarFila")
         self.btnEliminarFila.setGeometry(QRect(690, 100, 81, 26))
-        self.btnEnviarCurva = QPushButton(self.curve_editor)
-        self.btnEnviarCurva.setObjectName(u"btnEnviarCurva")
-        self.btnEnviarCurva.setGeometry(QRect(700, 140, 81, 26))
+        self.pushButton_4 = QPushButton(self.curve_editor)
+        self.pushButton_4.setObjectName(u"pushButton_4")
+        self.pushButton_4.setGeometry(QRect(700, 140, 81, 26))
         self.tabWidget.addTab(self.curve_editor, "")
         MainWindow.setCentralWidget(self.centralwidget)
         self.menubar = QMenuBar(MainWindow)
@@ -115,7 +115,7 @@ class Ui_MainWindow(object):
         self.tabWidget.setTabText(self.tabWidget.indexOf(self.tab_plots), QCoreApplication.translate("MainWindow", u"Graficos", None))
         self.btnAgregarFila.setText(QCoreApplication.translate("MainWindow", u"Agregar fila", None))
         self.btnEliminarFila.setText(QCoreApplication.translate("MainWindow", u"Eliminar fila", None))
-        self.btnEnviarCurva.setText(QCoreApplication.translate("MainWindow", u"Enviar", None))
+        self.pushButton_4.setText(QCoreApplication.translate("MainWindow", u"Enviar", None))
         self.tabWidget.setTabText(self.tabWidget.indexOf(self.curve_editor), QCoreApplication.translate("MainWindow", u"Curvas", None))
     # retranslateUi
 

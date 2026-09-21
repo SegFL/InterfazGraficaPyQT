@@ -86,96 +86,7 @@ class SerialReaderThread(QThread):
         self.wait()
 
 
-    def setup_curve_table(self):
-        self.tableCurva.setColumnCount(3)
-        self.tableCurva.setHorizontalHeaderLabels([
-            "Tiempo",
-            "Valor",
-            "Tipo"
-        ])
 
-        self.tableCurva.setRowCount(0)
-
-    def add_curve_row(self):
-        row = self.tableCurva.rowCount()
-        self.tableCurva.insertRow(row)
-
-        self.tableCurva.setItem(row, 0, QTableWidgetItem("0"))
-        self.tableCurva.setItem(row, 1, QTableWidgetItem("0"))
-        self.tableCurva.setItem(row, 2, QTableWidgetItem("STEP"))
-
-    def remove_curve_row(self):
-        row = self.tableCurva.currentRow()
-
-        if row >= 0:
-            self.tableCurva.removeRow(row)
-    def get_curve_data(self):
-        data = []
-
-        for row in range(self.tableCurva.rowCount()):
-
-            tiempo = self.tableCurva.item(row, 0)
-            valor = self.tableCurva.item(row, 1)
-            tipo = self.tableCurva.cellWidget(row, 2)
-
-            if tiempo is None or valor is None or tipo is None:
-                raise ValueError(f"Fila {row + 1} incompleta")
-
-            tiempo = int(tiempo.text())
-            valor = int(valor.text())
-            tipo = tipo.currentText()
-
-            data.append((tiempo, valor, tipo))
-
-        return data    
-
-    def validate_curve_data(self, data):
-
-        if not data:
-            return False, "La tabla está vacía."
-
-        previous_time = -1
-
-        for i, (tiempo, valor, tipo) in enumerate(data):
-
-            if tiempo < 0:
-                return False, f"Tiempo inválido en fila {i + 1}."
-
-            if valor < 0:
-                return False, f"Valor inválido en fila {i + 1}."
-
-            if tipo not in ("STEP", "LINEAR", "S_CURVE"):
-                return False, f"Tipo inválido en fila {i + 1}."
-
-            if tiempo <= previous_time:
-                return False, (
-                    f"El tiempo en fila {i + 1} "
-                    "debe ser mayor que el anterior."
-                )
-
-            previous_time = tiempo
-
-        return True, ""
-
-
-    def send_curve(self):
-
-        try:
-            data = self.get_curve_data()
-        except ValueError as e:
-            self.statusbar.showMessage(str(e))
-            return
-
-        valid, error = self.validate_curve_data(data)
-
-        if not valid:
-            self.statusbar.showMessage(error)
-            return
-
-        curve_id = self.spinBoxCurveID.value()
-
-        print("ID:", curve_id)
-        print("CURVA:", data)
 
 # ----------------------------------------------------------------------
 # VENTANA PRINCIPAL
@@ -226,6 +137,8 @@ class MainApp(QMainWindow, Ui_MainWindow):
         if self.btn_pause_widget:
             self.btn_pause_widget.clicked.connect(self.toggle_pause)
 
+        self.setup_curve_table()
+        self.setup_curve_plot()
         self._setup_graph()
 
         self.btn_refresh.clicked.connect(self.refresh_ports)
@@ -243,12 +156,95 @@ class MainApp(QMainWindow, Ui_MainWindow):
 
         self.refresh_ports()
 
-        self.setup_curve_table()
 
         self.btnAgregarFila.clicked.connect(self.add_curve_row)
         self.btnEliminarFila.clicked.connect(self.remove_curve_row)
         self.btnEnviarCurva.clicked.connect(self.send_curve)
 
+
+
+    def setup_curve_table(self):
+
+        self.tableCurva.setColumnCount(3)
+
+        self.tableCurva.setHorizontalHeaderLabels([
+            "Tiempo",
+            "Valor",
+            "Tipo"
+        ])
+
+        self.tableCurva.setRowCount(0)
+
+        self.tableCurva.itemChanged.connect(self.update_curve_plot)
+        
+
+    def add_curve_row(self):
+
+        row = self.tableCurva.rowCount()
+
+        self.tableCurva.insertRow(row)
+
+        self.tableCurva.setItem(
+            row, 0, QTableWidgetItem("0")
+        )
+
+        self.tableCurva.setItem(
+            row, 1, QTableWidgetItem("0")
+        )
+
+        combo = QComboBox()
+        combo.addItems([
+            "STEP",
+            "LINEAR"
+        ])
+
+        combo.currentTextChanged.connect(self.update_curve_plot)
+
+        self.tableCurva.setCellWidget(row, 2, combo)
+
+        self.update_curve_plot()
+
+    def remove_curve_row(self):
+
+        row = self.tableCurva.currentRow()
+
+        if row >= 0:
+            self.tableCurva.removeRow(row)
+            self.update_curve_plot()
+    def setup_curve_plot(self):
+
+        self.curve_plot = pg.PlotWidget()
+
+        self.curve_plot.setBackground("#0c0c0c")
+
+        self.curve_plot.showGrid(
+            x=True,
+            y=True,
+            alpha=0.3
+        )
+
+        self.curve_plot.setLabel(
+            "bottom",
+            "Tiempo",
+            units="ms"
+        )
+
+        self.curve_plot.setLabel(
+            "left",
+            "Valor"
+        )
+
+        self.curve_plot.setTitle(
+            "Curva"
+        )
+
+        layout = self.curve_editor.layout()
+
+        if layout is None:
+            layout = QVBoxLayout(self.curve_editor)
+
+        layout.addWidget(self.curve_plot)
+                    
     def toggle_pause(self):
         self.is_paused = not self.is_paused
         if self.btn_pause_widget:
@@ -396,24 +392,6 @@ class MainApp(QMainWindow, Ui_MainWindow):
         # Si el valor no es válido, volver al valor anterior
         self.input_muestras.setText(str(self.buffer_size))
 
-
-    def setup_curve_table(self):
-
-        self.tableCurva.setColumnCount(3)
-
-        self.tableCurva.setHorizontalHeaderLabels([
-            "Tiempo",
-            "Valor",
-            "Tipo"
-        ])
-
-        self.tableCurva.setRowCount(0)
-
-        self.btnAgregarPunto.clicked.connect(self.add_curve_point)
-        self.btnEliminarPunto.clicked.connect(self.remove_curve_point)
-
-        self.tableCurva.itemChanged.connect(self.update_curve_plot)
-        
     def update_plot(self):
         """Actualiza las curvas mostrando solamente las últimas buffer_size muestras."""
         if self.is_paused or not self.sensors_data:
@@ -533,6 +511,173 @@ class MainApp(QMainWindow, Ui_MainWindow):
         cursor.insertText(text)
         self.textEdit.setTextCursor(cursor)
         self.textEdit.ensureCursorVisible()
+
+
+
+    def get_curve_data(self):
+        data = []
+
+        for row in range(self.tableCurva.rowCount()):
+
+            tiempo = self.tableCurva.item(row, 0)
+            valor = self.tableCurva.item(row, 1)
+            tipo = self.tableCurva.cellWidget(row, 2)
+
+            if tiempo is None or valor is None or tipo is None:
+                raise ValueError(f"Fila {row + 1} incompleta")
+
+            tiempo = int(tiempo.text())
+            valor = int(valor.text())
+            tipo = tipo.currentText()
+
+            data.append((tiempo, valor, tipo))
+
+        return data    
+
+    def validate_curve_data(self, data):
+
+        if not data:
+            return False, "La tabla está vacía."
+
+        previous_time = -1
+
+        for i, (tiempo, valor, tipo) in enumerate(data):
+
+            if tiempo < 0:
+                return False, f"Tiempo inválido en fila {i + 1}."
+
+            if valor < 0:
+                return False, f"Valor inválido en fila {i + 1}."
+
+            if tipo not in ("STEP", "LINEAR", "S_CURVE"):
+                return False, f"Tipo inválido en fila {i + 1}."
+
+            if tiempo <= previous_time:
+                return False, (
+                    f"El tiempo en fila {i + 1} "
+                    "debe ser mayor que el anterior."
+                )
+
+            previous_time = tiempo
+
+        return True, ""
+    def update_curve_plot(self):
+
+        if not hasattr(self, "curve_plot"):
+            return
+
+        x, y = self.generate_curve_data()
+
+        if not x:
+            self.curve_plot.clear()
+            return
+
+        self.curve_plot.clear()
+
+        self.curve_plot.plot(
+            x,
+            y,
+            pen=pg.mkPen(
+                color="#00ffff",
+                width=2
+            ),
+            symbol="o",
+            symbolSize=7
+        )
+
+    def generate_curve_data(self):
+
+        points = []
+
+        for row in range(self.tableCurva.rowCount()):
+
+            time_item = self.tableCurva.item(row, 0)
+            value_item = self.tableCurva.item(row, 1)
+            type_widget = self.tableCurva.cellWidget(row, 2)
+
+            if time_item is None or value_item is None or type_widget is None:
+                continue
+
+            try:
+                t = float(time_item.text())
+                value = float(value_item.text())
+            except ValueError:
+                continue
+
+            curve_type = type_widget.currentText()
+
+            points.append((t, value, curve_type))
+
+        # Ordenar por tiempo
+        points.sort(key=lambda x: x[0])
+
+        if len(points) == 0:
+            return [], []
+
+        if len(points) == 1:
+            return [points[0][0]], [points[0][1]]
+
+        x = []
+        y = []
+
+        for i in range(len(points) - 1):
+
+            t1, v1, tipo = points[i]
+            t2, v2, _ = points[i + 1]
+
+            if t2 <= t1:
+                continue
+
+            if tipo == "STEP":
+
+                # Valor constante hasta el próximo punto
+                x.extend([
+                    t1,
+                    t2
+                ])
+
+                y.extend([
+                    v1,
+                    v1
+                ])
+
+            elif tipo == "LINEAR":
+
+                # Recta entre los dos puntos
+                x.extend([
+                    t1,
+                    t2
+                ])
+
+                y.extend([
+                    v1,
+                    v2
+                ])
+
+        # Agregar el último punto
+        x.append(points[-1][0])
+        y.append(points[-1][1])
+
+        return x, y
+    def send_curve(self):
+
+        try:
+            data = self.get_curve_data()
+        except ValueError as e:
+            self.statusbar.showMessage(str(e))
+            return
+
+        valid, error = self.validate_curve_data(data)
+
+        if not valid:
+            self.statusbar.showMessage(error)
+            return
+
+        curve_id = self.spinBoxCurveID.value()
+
+        print("ID:", curve_id)
+        print("CURVA:", data)
+
 
     def send_data(self):
         if self.serial_port and self.serial_port.is_open and self.input_send_widget:

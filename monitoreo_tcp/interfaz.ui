@@ -165,7 +165,7 @@
      <attribute name="title">
       <string>Curvas</string>
      </attribute>
-     <widget class="QTableWidget" name="tableWidget">
+     <widget class="QTableWidget" name="tableCurva">
       <property name="geometry">
        <rect>
         <x>50</x>
@@ -211,7 +211,7 @@
        <string>Eliminar fila</string>
       </property>
      </widget>
-     <widget class="QPushButton" name="pushButton_4">
+     <widget class="QPushButton" name="btnEnviarCurva">
       <property name="geometry">
        <rect>
         <x>700</x>
