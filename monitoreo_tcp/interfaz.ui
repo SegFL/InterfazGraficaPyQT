@@ -224,6 +224,16 @@
        <string>Enviar</string>
       </property>
      </widget>
+     <widget class="QTableWidget" name="tableCurva">
+      <property name="geometry">
+       <rect>
+        <x>60</x>
+        <y>270</y>
+        <width>581</width>
+        <height>192</height>
+       </rect>
+      </property>
+     </widget>
     </widget>
    </widget>
   </widget>
