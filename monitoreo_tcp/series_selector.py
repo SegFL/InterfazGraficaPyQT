@@ -15,7 +15,6 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
 )
 
-# (clave interna, encabezado, tooltip)
 MAGNITUDES = (
     ("v", "V", "Tensión"),
     ("i", "I", "Corriente"),
@@ -24,11 +23,12 @@ MAGNITUDES = (
 
 
 class SeriesSelector(QGroupBox):
-    changed = Signal(int, str, bool)   # (sensor_id, magnitud, visible)
+    changed = Signal(int, str, bool)
+    remove_requested = Signal(int)
 
     def __init__(self, parent=None):
         super().__init__("Series visibles", parent)
-        self._rows = {}                # sensor_id -> (QLabel, {mag: QCheckBox})
+        self._rows = {}
 
         outer = QVBoxLayout(self)
         self._grid = QGridLayout()
@@ -52,7 +52,6 @@ class SeriesSelector(QGroupBox):
             lbl.setAlignment(Qt.AlignCenter)
             self._grid.addWidget(lbl, 0, col)
 
-    # -- API ------------------------------------------------------------
     def add_sensor(self, sensor_id: int):
         if sensor_id in self._rows:
             return
@@ -60,13 +59,29 @@ class SeriesSelector(QGroupBox):
         boxes = {}
         for mag, _, tip in MAGNITUDES:
             cb = QCheckBox()
-            cb.setChecked(True)                      # por defecto todo visible
+            cb.setChecked(True)
             cb.setToolTip(f"{tip} - sensor {sensor_id}")
             cb.toggled.connect(
                 lambda chk, s=sensor_id, m=mag: self.changed.emit(s, m, chk)
             )
             boxes[mag] = cb
-        self._rows[sensor_id] = (label, boxes)
+
+        btn_remove = QPushButton("✕")
+        btn_remove.setFixedWidth(24)
+        btn_remove.setToolTip(f"Quitar sensor {sensor_id}")
+        btn_remove.clicked.connect(lambda: self.remove_requested.emit(sensor_id))
+
+        self._rows[sensor_id] = (label, boxes, btn_remove)
+        self._relayout()
+
+    def remove_sensor(self, sensor_id: int):
+        row = self._rows.pop(sensor_id, None)
+        if row is None:
+            return
+        label, boxes, btn_remove = row
+        for w in (label, *boxes.values(), btn_remove):
+            self._grid.removeWidget(w)
+            w.deleteLater()
         self._relayout()
 
     def is_visible(self, sensor_id: int, mag: str) -> bool:
@@ -74,17 +89,17 @@ class SeriesSelector(QGroupBox):
         return True if row is None else row[1][mag].isChecked()
 
     def set_all(self, state: bool):
-        for _, boxes in self._rows.values():
+        for _, boxes, _ in self._rows.values():
             for cb in boxes.values():
                 cb.setChecked(state)
 
-    # -- interno ----------------------------------------------------------
     def _relayout(self):
-        """Reubica las filas ordenadas por sensor_id (encabezado = fila 0)."""
         for row, sid in enumerate(sorted(self._rows), start=1):
-            label, boxes = self._rows[sid]
+            label, boxes, btn_remove = self._rows[sid]
             self._grid.removeWidget(label)
             self._grid.addWidget(label, row, 0)
             for col, (mag, _, _) in enumerate(MAGNITUDES, start=1):
                 self._grid.removeWidget(boxes[mag])
                 self._grid.addWidget(boxes[mag], row, col, alignment=Qt.AlignCenter)
+            self._grid.removeWidget(btn_remove)
+            self._grid.addWidget(btn_remove, row, len(MAGNITUDES) + 1)

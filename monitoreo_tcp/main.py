@@ -1,5 +1,7 @@
 import sys
 import serial
+import os
+import csv
 import serial.tools.list_ports
 from collections import deque
 import queue
@@ -17,7 +19,7 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QTableWidgetItem,
     QComboBox,
-
+    QFileDialog,
 )
 
 from interfaz_ui import Ui_MainWindow
@@ -105,7 +107,9 @@ class MainApp(QMainWindow, Ui_MainWindow):
         super().__init__()
         self.setupUi(self)
 
-  
+        self.grabando = False
+        self.archivo_csv = None
+        self.escritor_csv = None
         self.serial_port = None
         self.reader_thread = None
         self.is_paused = False
@@ -130,9 +134,7 @@ class MainApp(QMainWindow, Ui_MainWindow):
         self.input_send_widget = getattr(self, "input_send", None) or getattr(
             self, "lineEdit", None
         )
-        self.btn_pause_widget = getattr(self, "btn_pause", None) or getattr(
-            self, "pushButton_3", None
-        )
+        self.btn_pause_widget = self.btnStop
 
         # QLineEdit para controlar la cantidad de muestras en pantalla
         self.input_muestras = getattr(self, "lineEdit_muestras", None) or getattr(self, "lineEdit_2", None)
@@ -153,7 +155,7 @@ class MainApp(QMainWindow, Ui_MainWindow):
         self.btn_refresh.clicked.connect(self.refresh_ports)
         self.btnIniciar.clicked.connect(self.toggle_connection)
         self.pushButton_2.clicked.connect(self.send_data)
-
+        self.btnCargarArchivo.clicked.connect(self.load_csv_files)
         if self.input_send_widget:
             self.input_send_widget.returnPressed.connect(self.send_data)
 
@@ -170,7 +172,60 @@ class MainApp(QMainWindow, Ui_MainWindow):
         self.btnEliminarFila.clicked.connect(self.remove_curve_row)
         self.btnEnviarCurva.clicked.connect(self.send_curve)
 
+        self.btnToggleFiles.toggled.connect(self.toggle_file_panel)
 
+        self.carpeta_destino = r"C:\Users\segus\Desktop\Backup segundo cuatri 02102024\Placa de consumo TPP\App de MATLAB\Data\DatosPy"
+        os.makedirs(self.carpeta_destino, exist_ok=True)
+
+        # 2. Configurar el botón de grabación
+        self.btn_grabar.setCheckable(True)
+        self.btn_grabar.setText("Iniciar Grabación")
+        self.btn_grabar.toggled.connect(self.on_toggle_grabar)
+
+    def on_toggle_grabar(self, esta_presionado):
+        if esta_presionado:
+            if self.iniciar_grabacion():
+                self.btn_grabar.setText("Grabando... (Clic para frenar)")
+            else:
+                self.btn_grabar.setChecked(False)
+        else:
+            self.detener_grabacion()
+            self.btn_grabar.setText("Iniciar Grabación")
+
+    def iniciar_grabacion(self):
+        """Habilita la grabación. Los archivos se crearán dinámicamente por cada sensor."""
+        from datetime import datetime
+
+        self.timestamp_inicio = datetime.now().strftime("%Y%m%d_%H%M%S")
+        
+        # Diccionarios para manejar múltiples archivos/escritores abiertos por ID
+        self.archivos_csv = {}
+        self.escritores_csv = {}
+        
+        self.grabando = True
+        self.statusbar.showMessage("Grabación iniciada (archivos por sensor)")
+        self.append_text(f"[REC] Grabación iniciada con timestamp: {self.timestamp_inicio}\n")
+        return True
+
+    def detener_grabacion(self):
+        """Cierra todos los archivos CSV que estén abiertos."""
+        self.grabando = False
+        if hasattr(self, 'archivos_csv') and self.archivos_csv:
+            for sensor_id, archivo in self.archivos_csv.items():
+                try:
+                    archivo.close()
+                except Exception as e:
+                    print(f"Error al cerrar archivo del sensor {sensor_id}: {e}")
+            
+            self.archivos_csv.clear()
+            self.escritores_csv.clear()
+            
+            self.statusbar.showMessage("Grabación finalizada y archivos cerrados")
+            self.append_text("[REC] Grabación finalizada.\n")
+
+    def toggle_file_panel(self, checked):
+        self.framePanelArchivos.setVisible(checked)
+        self.btnToggleFiles.setArrowType(Qt.DownArrow if checked else Qt.RightArrow)
 
     def setup_curve_table(self):
 
@@ -222,7 +277,6 @@ class MainApp(QMainWindow, Ui_MainWindow):
             self.update_curve_plot()
     def setup_curve_plot(self):
 
-        self.curve_plot = pg.PlotWidget()
 
         self.curve_plot.setBackground("#0c0c0c")
 
@@ -247,12 +301,7 @@ class MainApp(QMainWindow, Ui_MainWindow):
             "Curva"
         )
 
-        layout = self.plot_curva_container.layout()
-        if layout is None:
-            layout = QVBoxLayout(self.plot_curva_container)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.addWidget(self.curve_plot)
-                    
+  
     def toggle_pause(self):
         self.is_paused = not self.is_paused
         if self.btn_pause_widget:
@@ -264,18 +313,29 @@ class MainApp(QMainWindow, Ui_MainWindow):
                 self.statusbar.showMessage("Gráfico en tiempo real")
 
     def _setup_graph(self):
-        """Configura el PlotWidget con auto-escalado dinámico en Y para todos los ejes
-        y el selector de series a la derecha."""
+        """Configura los ejes y la visualización del PlotWidget que ya existe en la UI."""
         pg.setConfigOptions(antialias=True)
-        self.graph_widget = pg.PlotWidget(title="Telemetría de Sensores - Tiempo Real")
+
+        self.graph_widget = self.layout_plots
+
+
+        if self.graph_widget is None:
+            print("ERROR: No se encontró ningún PlotWidget en la interfaz de Qt Designer.")
+            return
+
+        # 2. Identificar el SeriesSelector creado por Qt Designer
+        self.selector = self.containerSelector
+
+        # Resto de la configuración de ejes...
+        self.graph_widget.setTitle("Telemetría de Sensores - Tiempo Real")
         self.graph_widget.setBackground("#0c0c0c")
         self.graph_widget.showGrid(x=True, y=True, alpha=0.3)
         self.graph_widget.setLabel("bottom", "Tiempo", units="s")
         self.graph_widget.addLegend(offset=(10, 10))
- 
+
         # Eje Principal (Izquierda) -> Tensión
         self.graph_widget.setLabel("left", "Tensión", units="V", color="#00ffff")
- 
+
         # Eje Adicional 1 (Derecha) -> Corriente
         self.vb2 = pg.ViewBox()
         self.graph_widget.plotItem.scene().addItem(self.vb2)
@@ -284,7 +344,7 @@ class MainApp(QMainWindow, Ui_MainWindow):
         axis2.linkToView(self.vb2)
         axis2.setLabel("Corriente", units="mA", color="#ffff00")
         self.axis_i = axis2
- 
+
         # Eje Adicional 2 (Derecha exterior) -> Potencia
         self.vb3 = pg.ViewBox()
         self.graph_widget.plotItem.scene().addItem(self.vb3)
@@ -293,43 +353,32 @@ class MainApp(QMainWindow, Ui_MainWindow):
         axis3.linkToView(self.vb3)
         axis3.setLabel("Potencia", units="mW", color="#ff00ff")
         self.axis_p = axis3
- 
-        # Sincronización X entre las distintas capas (ViewBoxes)
+
+        # Sincronización X entre ViewBoxes
         self.vb2.setXLink(self.graph_widget.plotItem.vb)
         self.vb3.setXLink(self.graph_widget.plotItem.vb)
- 
-        # Auto-escalado vertical independiente en cada capa
+
+        # Auto-escalado vertical independiente
         self.graph_widget.enableAutoRange(axis=pg.ViewBox.YAxis, enable=True)
         self.vb2.enableAutoRange(axis=pg.ViewBox.YAxis, enable=True)
         self.vb3.enableAutoRange(axis=pg.ViewBox.YAxis, enable=True)
- 
+
+
         def update_views():
             rect = self.graph_widget.plotItem.vb.sceneBoundingRect()
             self.vb2.setGeometry(rect)
             self.vb2.linkedViewChanged(self.graph_widget.plotItem.vb, self.vb2.XAxis)
- 
+
             self.vb3.setGeometry(rect)
             self.vb3.linkedViewChanged(self.graph_widget.plotItem.vb, self.vb3.XAxis)
- 
+
         self.graph_widget.plotItem.vb.sigResized.connect(update_views)
         update_views()
- 
-        # ---- Selector de series (matriz sensor x magnitud) a la derecha ----
-        self.selector = SeriesSelector()
-        self.selector.changed.connect(self.on_series_toggled)
- 
-        splitter = QSplitter(Qt.Horizontal)
-        splitter.addWidget(self.graph_widget)
-        splitter.addWidget(self.selector)
-        splitter.setStretchFactor(0, 1)
-        splitter.setStretchFactor(1, 0)
- 
-        container_layout = self.layout_plots.layout()
-        if container_layout is None:
-            container_layout = QVBoxLayout(self.layout_plots)
-        container_layout.addWidget(splitter)
 
-
+        if self.selector:
+            self.selector.changed.connect(self.on_series_toggled)
+            self.selector.remove_requested.connect(self.remove_sensor)   
+            
     @Slot(int, float, float, float, float)
     def store_sensor_data(self, sensor_id, t, v1, v2, v3):
         s = self._get_or_create_sensor(sensor_id)
@@ -338,49 +387,65 @@ class MainApp(QMainWindow, Ui_MainWindow):
         s["corriente"].append(v2)
         s["potencia"].append(v3)
 
+        # Si la grabación está activa, escribir en el CSV del sensor correspondiente
+        if self.grabando:
+            try:
+                # Si es la primera muestra de este sensor en esta sesión, crear su archivo CSV
+                if sensor_id not in self.escritores_csv:
+                    nombre_archivo = f"sensor_{sensor_id}_{self.timestamp_inicio}.csv"
+                    path_completo = os.path.join(self.carpeta_destino, nombre_archivo)
+                    
+                    f = open(path_completo, mode="w", newline="", encoding="utf-8")
+                    writer = csv.writer(f, delimiter=";")
+                    
+                    # Encabezado optimizado (sin Sensor_ID)
+                    writer.writerow(["Tiempo_s", "Tension_V", "Corriente_mA", "Potencia_mW"])
+                    f.flush()
+                    
+                    self.archivos_csv[sensor_id] = f
+                    self.escritores_csv[sensor_id] = writer
+                    self.append_text(f"[REC] Creado archivo para Sensor {sensor_id}: {nombre_archivo}\n")
+
+                # Escribir la muestra en el archivo específico del sensor
+                self.escritores_csv[sensor_id].writerow([f"{t:.3f}", f"{v1:.3f}", f"{v2:.3f}", f"{v3:.3f}"])
+                
+            except Exception as e:
+                print(f"Error guardando muestra del sensor {sensor_id}: {e}")
 
 
-    def _get_or_create_sensor(self, sensor_id):
-        """Inicializa dinámicamente las estructuras de datos y curvas del sensor."""
+    def _get_or_create_sensor(self, sensor_id, suffix=None, colors=None, static=False):
         if sensor_id not in self.sensors_data:
-            # Paleta de colores para cada sensor: (Tensión, Corriente, Potencia)
             color_palette = {
                 0: ("#00ffff", "#ffff00", "#ff00ff"),
                 1: ("#00ff00", "#ff8800", "#ff0055"),
                 2: ("#3388ff", "#ffcc00", "#cc00ff"),
             }
- 
-            c_v, c_i, c_p = color_palette.get(
+            c_v, c_i, c_p = colors or color_palette.get(
                 sensor_id, ("#ffffff", "#aaaaaa", "#777777")
             )
- 
+
             style_cfg = self.sensor_styles.get(
                 sensor_id, {"style": Qt.SolidLine, "suffix": f"S{sensor_id}"}
             )
             line_style = style_cfg["style"]
-            suffix = style_cfg["suffix"]
- 
+            suffix = suffix or style_cfg["suffix"]
+
             names = {
                 "v": f"Tensión - {suffix}",
                 "i": f"Corriente - {suffix}",
                 "p": f"Potencia - {suffix}",
             }
- 
+
             pen_tension = pg.mkPen(color=c_v, width=2, style=line_style)
             pen_corriente = pg.mkPen(color=c_i, width=2, style=line_style)
             pen_potencia = pg.mkPen(color=c_p, width=2, style=line_style)
- 
-            # 1. Tensión (Eje Y principal / Izquierda) -> se registra sola en la leyenda
+
             curve_v = self.graph_widget.plot(pen=pen_tension, name=names["v"])
- 
-            # 2. Corriente (Eje Y secundario / Derecha 1)
             curve_i = pg.PlotCurveItem(pen=pen_corriente, name=names["i"])
             self.vb2.addItem(curve_i)
- 
-            # 3. Potencia (Eje Y terciario / Derecha 2)
             curve_p = pg.PlotCurveItem(pen=pen_potencia, name=names["p"])
             self.vb3.addItem(curve_p)
- 
+
             self.sensors_data[sensor_id] = {
                 "time": deque(maxlen=10000),
                 "tension": deque(maxlen=10000),
@@ -388,15 +453,14 @@ class MainApp(QMainWindow, Ui_MainWindow):
                 "potencia": deque(maxlen=10000),
                 "curves": {"v": curve_v, "i": curve_i, "p": curve_p},
                 "names": names,
+                "static": static,
             }
- 
-            # Registrar en la matriz de checks y aplicar la selección vigente
+
             self.selector.add_sensor(sensor_id)
             for m in ("v", "i", "p"):
                 self.apply_series_visibility(sensor_id, m)
- 
-        return self.sensors_data[sensor_id]
 
+        return self.sensors_data[sensor_id]
 
     @Slot(int, str, bool)
     def on_series_toggled(self, sensor_id, mag, visible):
@@ -416,7 +480,27 @@ class MainApp(QMainWindow, Ui_MainWindow):
         if visible:
             legend.addItem(curve, s["names"][mag])
         self._update_axes_visibility()
- 
+    @Slot(int)
+    def remove_sensor(self, sensor_id):
+        s = self.sensors_data.pop(sensor_id, None)
+        if s is None:
+            return
+
+        c = s["curves"]
+        legend = self.graph_widget.plotItem.legend
+
+        self.graph_widget.removeItem(c["v"])
+        self.vb2.removeItem(c["i"])
+        self.vb3.removeItem(c["p"])
+        if legend:
+            for curve in c.values():
+                legend.removeItem(curve)
+
+        self.selector.remove_sensor(sensor_id)
+        self._update_axes_visibility()
+        self.statusbar.showMessage(f"Serie {sensor_id} eliminada")\
+
+        
     def _update_axes_visibility(self):
         """Oculta el eje de una magnitud si no hay ninguna serie visible."""
         axes = {
@@ -471,7 +555,10 @@ class MainApp(QMainWindow, Ui_MainWindow):
         has_data = False
  
         for s_id, s in self.sensors_data.items():
- 
+
+            if s.get("static"):
+                continue
+
             if len(s["time"]) < 1:
                 continue
  
@@ -517,17 +604,18 @@ class MainApp(QMainWindow, Ui_MainWindow):
  
         baud_text = self.comboBox_2.currentText()
         baud_rate = int(baud_text) if baud_text.isdigit() else 115200
- 
         try:
-            # Quitar realmente las curvas anteriores del plot y de la leyenda
-            legend = self.graph_widget.plotItem.legend
-            for s in self.sensors_data.values():
-                c = s["curves"]
-                self.graph_widget.removeItem(c["v"])
-                self.vb2.removeItem(c["i"])
-                self.vb3.removeItem(c["p"])
-                for curve in c.values():
-                    legend.removeItem(curve)
+            if self.graph_widget and hasattr(self.graph_widget, "plotItem"):
+                legend = self.graph_widget.plotItem.legend
+                for s in self.sensors_data.values():
+                    c = s["curves"]
+                    self.graph_widget.removeItem(c["v"])
+                    self.vb2.removeItem(c["i"])
+                    self.vb3.removeItem(c["p"])
+                    if legend:
+                        for curve in c.values():
+                            legend.removeItem(curve)
+            
             self.sensors_data.clear()
  
             self.serial_port = serial.Serial(port_name, baud_rate, timeout=0.1)
@@ -725,6 +813,80 @@ class MainApp(QMainWindow, Ui_MainWindow):
         self.statusbar.showMessage(("✔ " if ok else "✘ ") + msg)
         self.append_text(f"[CURVA] {msg}\n")
 
+    def load_csv_files(self):
+        paths, _ = QFileDialog.getOpenFileNames(
+            self, "Seleccionar archivos CSV", "", "CSV (*.csv)"
+        )
+        if not paths:
+            return
+
+        next_id = 1000
+
+        for path in paths:
+            try:
+                with open(path, newline="", encoding="utf-8-sig") as f:
+                    sample = f.read(2048)
+                    f.seek(0)
+                    try:
+                        dialect = csv.Sniffer().sniff(sample, delimiters=",;")
+                    except csv.Error:
+                        dialect = csv.excel
+                    reader = csv.reader(f, dialect)
+                    header = [h.strip().lower() for h in next(reader)]
+                    rows = [r for r in reader if len(r) == len(header)]
+            except Exception as e:
+                self.statusbar.showMessage(f"Error al leer {os.path.basename(path)}: {e}")
+                continue
+
+            def find_col(keys, default):
+                for i, h in enumerate(header):
+                    if any(k in h for k in keys):
+                        return i
+                return default
+
+            col_t = find_col(("tiempo", "time"), 0)
+            col_i = find_col(("corriente", "current", "amp"), 1)
+            col_v = find_col(("tension", "volt"), 2)
+            col_p = find_col(("potencia", "power", "watt"), 3)
+
+            if max(col_t, col_i, col_v, col_p) >= len(header):
+                self.statusbar.showMessage(f"{os.path.basename(path)}: columnas insuficientes")
+                continue
+
+            try:
+                data = [[float(v.replace(",", ".")) for v in row] for row in rows]
+            except ValueError:
+                self.statusbar.showMessage(f"{os.path.basename(path)}: datos no numéricos")
+                continue
+
+            if not data:
+                continue
+
+            while next_id in self.sensors_data:
+                next_id += 1
+
+            s = self._get_or_create_sensor(
+                next_id,
+                suffix=os.path.splitext(os.path.basename(path))[0],
+                static=True,
+            )
+            s["time"] = deque((row[col_t] for row in data), maxlen=len(data))
+            s["corriente"] = deque((row[col_i] for row in data), maxlen=len(data))
+            s["tension"] = deque((row[col_v] for row in data), maxlen=len(data))
+            s["potencia"] = deque((row[col_p] for row in data), maxlen=len(data))
+
+            s["curves"]["v"].setData(list(s["time"]), list(s["tension"]))
+            s["curves"]["i"].setData(list(s["time"]), list(s["corriente"]))
+            s["curves"]["p"].setData(list(s["time"]), list(s["potencia"]))
+
+            for m in ("v", "i", "p"):
+                self.apply_series_visibility(next_id, m)
+
+            next_id += 1
+
+        self.graph_widget.autoRange()
+        self.statusbar.showMessage(f"{len(paths)} archivo(s) cargado(s)")
+        
         
     def send_data(self):
         if self.serial_port and self.serial_port.is_open and self.input_send_widget:
@@ -747,6 +909,8 @@ class MainApp(QMainWindow, Ui_MainWindow):
         self.disconnect_serial()
 
     def closeEvent(self, event):
+        if self.grabando:
+            self.detener_grabacion()
         self.disconnect_serial()
         event.accept()
 
