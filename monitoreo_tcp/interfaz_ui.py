@@ -39,7 +39,7 @@ class Ui_MainWindow(object):
         self.centralwidget.setObjectName(u"centralwidget")
         sizePolicy.setHeightForWidth(self.centralwidget.sizePolicy().hasHeightForWidth())
         self.centralwidget.setSizePolicy(sizePolicy)
-        self.centralwidget.setMaximumSize(QSize(16777215, 546))
+        self.centralwidget.setMaximumSize(QSize(16777215, 16777215))
         self.horizontalLayout_2 = QHBoxLayout(self.centralwidget)
         self.horizontalLayout_2.setObjectName(u"horizontalLayout_2")
         self.frame_2 = QFrame(self.centralwidget)

@@ -174,9 +174,8 @@ class MainApp(QMainWindow, Ui_MainWindow):
 
         self.btnToggleFiles.toggled.connect(self.toggle_file_panel)
 
-        self.carpeta_destino = r"C:\Users\segus\Desktop\Backup segundo cuatri 02102024\Placa de consumo TPP\App de MATLAB\Data\DatosPy"
+        self.carpeta_destino = os.path.join(os.path.dirname(os.path.abspath(__file__)), "DatosPy")
         os.makedirs(self.carpeta_destino, exist_ok=True)
-
         # 2. Configurar el botón de grabación
         self.btn_grabar.setCheckable(True)
         self.btn_grabar.setText("Iniciar Grabación")
