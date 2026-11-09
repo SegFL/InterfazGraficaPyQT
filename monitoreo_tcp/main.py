@@ -2,7 +2,10 @@ import sys
 import serial
 import os
 import csv
+import codecs
+import pyte
 import serial.tools.list_ports
+import re
 from collections import deque
 import queue
 from curve_sender import CurveSenderThread, verify_and_strip
@@ -20,9 +23,14 @@ from PySide6.QtWidgets import (
     QTableWidgetItem,
     QComboBox,
     QFileDialog,
+    QTextEdit, 
 )
 
 from interfaz_ui import Ui_MainWindow
+
+DATA_RE = re.compile(r"0,\d+(?:,[-+]?\d+(?:\.\d+)?)+\*[0-9A-Fa-f]{2}")
+print(bool(DATA_RE.search('0,10593,-0.152,0.870,0.010,-0.132,1*37\r')))   # debe dar True
+PROTO_RE = re.compile(r"2,[^\r\n*]*\*[0-9A-Fa-f]{2}")
 
 
 # ----------------------------------------------------------------------
@@ -30,7 +38,6 @@ from interfaz_ui import Ui_MainWindow
 # ----------------------------------------------------------------------
 class SerialReaderThread(QThread):
     data_received = Signal(str)
-    # Emite: (sensor_id, tiempo_seg, tension, corriente, potencia)
     parsed_data_received = Signal(int, float, float, float, float)
     error_occurred = Signal(str)
 
@@ -39,54 +46,85 @@ class SerialReaderThread(QThread):
         self.serial_port = serial_port
         self._is_running = True
         self._rx_buffer = ""
-
+        # Decoder incremental: evita caracteres rotos si un "ó" llega partido entre lecturas
+        self._decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
         self.app_queue = queue.Queue()
+
+    PARTIAL_RE = re.compile(r"[02](?:,[-+.,\d*A-Fa-f]*)?\r?$")
+
+    @classmethod
+    def _split_partial(cls, tail):
+        """Devuelve (emitible, retenido)."""
+        m = cls.PARTIAL_RE.search(tail)
+        if m:
+            return tail[:m.start()], tail[m.end() - len(m.group(0)):]
+        return tail, ""
+    
+
+    def _parse_data_frame(self, line_str):
+        if "*" not in line_str:
+            return
+        parts = line_str.split("*")[0].split(",")
+        if len(parts) < 5:
+            return
+        try:
+            time_sec = float(parts[1]) / 1000.0
+            i_corriente = float(parts[2])
+            v_tension = float(parts[3])
+            p_potencia = float(parts[4])
+
+            sensor_id = 0
+            if len(parts) >= 7 and parts[6].strip().isdigit():
+                sensor_id = int(parts[6].strip())
+            elif len(parts) >= 6 and parts[5].strip().isdigit():
+                sensor_id = int(parts[5].strip())
+
+            self.parsed_data_received.emit(
+                sensor_id, time_sec, v_tension, i_corriente, p_potencia
+            )
+        except ValueError:
+            pass
+
+    def _handle_line(self, line):
+        rest = line
+        m = DATA_RE.search(rest)
+        if m:                                    # datos -> gráfico
+            self._parse_data_frame(m.group(0))
+            rest = rest[:m.start()] + rest[m.end():]
+        else:
+            m = PROTO_RE.search(rest)
+            if m:                                # protocolo de curvas -> cola
+                payload = verify_and_strip(m.group(0))
+                if payload is not None:
+                    self.app_queue.put(payload)
+                rest = rest[:m.start()] + rest[m.end():]
+
+        if m:
+            # Se extrajo una trama: emitir solo lo que sobra, sin "\n"
+            if rest.strip():
+                self.data_received.emit(rest)
+        else:
+            self.data_received.emit(line + "\n")
+
 
     def run(self):
         while self._is_running and self.serial_port and self.serial_port.is_open:
             try:
-                if self.serial_port.in_waiting > 0:
-                    raw_data = self.serial_port.read(self.serial_port.in_waiting)
-                    text = raw_data.decode("utf-8", errors="replace")
-                    self._rx_buffer += text
+                n = self.serial_port.in_waiting
+                if n > 0:
+                    self._rx_buffer += self._decoder.decode(self.serial_port.read(n))
 
                     while "\n" in self._rx_buffer:
                         line, self._rx_buffer = self._rx_buffer.split("\n", 1)
-                        line_str = line.strip()
+                        self._handle_line(line)
 
-                        # 1. Trama de datos (arranca con "0,")
-                        if line_str.startswith("0,"):
-                            if "*" in line_str:
-                                clean_line = line_str.split("*")[0]
-                                parts = clean_line.split(",")
-
-                                if len(parts) >= 5:
-                                    try:
-                                        time_sec = float(parts[1]) / 1000.0
-                                        i_corriente = float(parts[2])
-                                        v_tension = float(parts[3])
-                                        p_potencia = float(parts[4])
-
-                                        sensor_id = 0
-                                        if len(parts) >= 7 and parts[6].strip().isdigit():
-                                            sensor_id = int(parts[6].strip())
-                                        elif len(parts) >= 6 and parts[5].strip().isdigit():
-                                            sensor_id = int(parts[5].strip())
-
-                                        self.parsed_data_received.emit(
-                                            sensor_id, time_sec, v_tension, i_corriente, p_potencia
-                                        )
-                                    except ValueError:
-                                        pass
-
-                        # 2. Menú o texto general para consola
-                        else:
-                            if line_str.startswith("2,"):
-                                payload = verify_and_strip(line_str)
-                                if payload is not None:
-                                    self.app_queue.put(payload)
-                            if line_str:
-                                self.data_received.emit(line + "\n")
+                    # Resto sin '\n': emitir lo que no pueda ser inicio de trama
+                    # y retener la cola sospechosa hasta que llegue el '\n'.
+                    if self._rx_buffer:
+                        emit, keep = self._split_partial(self._rx_buffer)
+                        if emit:
+                            self.data_received.emit(emit)
+                        self._rx_buffer = keep
             except Exception as e:
                 self.error_occurred.emit(str(e))
                 break
@@ -95,7 +133,6 @@ class SerialReaderThread(QThread):
     def stop(self):
         self._is_running = False
         self.wait()
-
 
 
 
@@ -127,6 +164,19 @@ class MainApp(QMainWindow, Ui_MainWindow):
         self.textEdit.setStyleSheet(
             "QTextEdit { background-color: #0d0d0d; color: #00ff00; font-family: Consolas, 'Courier New', monospace; font-size: 11pt; }"
         )
+
+        # Emulador de terminal (pyte)
+        self.screen = pyte.Screen(80, 24)            # columnas, filas (como TeraTerm)
+        self.vt_stream = pyte.Stream(self.screen)
+        self.reset_terminal()
+
+        self.textEdit.setLineWrapMode(QTextEdit.LineWrapMode.NoWrap)
+        self.textEdit.setReadOnly(True)
+
+        self.term_timer = QTimer()
+        self.term_timer.setInterval(30)
+        self.term_timer.timeout.connect(self.render_terminal)
+        self.term_timer.start()
 
         if self.comboBox_2.count() == 0:
             self.comboBox_2.addItems(["115200", "9600", "57600", "230400"])
@@ -616,7 +666,7 @@ class MainApp(QMainWindow, Ui_MainWindow):
                             legend.removeItem(curve)
             
             self.sensors_data.clear()
- 
+            self.reset_terminal()
             self.serial_port = serial.Serial(port_name, baud_rate, timeout=0.1)
  
             self.reader_thread = SerialReaderThread(self.serial_port)
@@ -661,14 +711,19 @@ class MainApp(QMainWindow, Ui_MainWindow):
 
         self.statusbar.showMessage("Desconectado")
 
+    def reset_terminal(self):
+        self.screen.reset()
+        self.screen.set_mode(pyte.modes.LNM)   # '\n' también hace retorno de carro
+
     @Slot(str)
     def append_text(self, text):
-        cursor = self.textEdit.textCursor()
-        cursor.movePosition(QTextCursor.MoveOperation.End)
-        cursor.insertText(text)
-        self.textEdit.setTextCursor(cursor)
-        self.textEdit.ensureCursorVisible()
+        self.vt_stream.feed(text)
 
+    def render_terminal(self):
+        if not self.screen.dirty:              # nada cambió, no redibujar
+            return
+        self.screen.dirty.clear()
+        self.textEdit.setPlainText("\n".join(self.screen.display))
 
 
     def get_curve_data(self):
@@ -896,7 +951,7 @@ class MainApp(QMainWindow, Ui_MainWindow):
 
                 cursor = self.textEdit.textCursor()
                 cursor.movePosition(QTextCursor.MoveOperation.End)
-                cursor.insertText(f">> {text}\n")
+                self.append_text(f">> {text}\n")
                 self.textEdit.setTextCursor(cursor)
                 self.textEdit.ensureCursorVisible()
 
