@@ -1,0 +1,57 @@
+# Compilar el ejecutable (MiApp.exe)
+
+Proyecto: `monitoreo_tcp` | Python 3.13.7 | Windows | PySide6 + pyqtgraph + pyserial + pyte
+
+Ejecutar siempre desde la carpeta del proyecto:
+
+```
+cd D:\Documentos\Varios\pyGUI\monitoreo_tcp
+```
+
+## 1. Compilar (version de prueba, con consola)
+
+```
+pyinstaller --clean --onefile --name MiApp --hidden-import pyte --hidden-import wcwidth --hidden-import serial.tools.list_ports --exclude-module PyQt6 --exclude-module PyQt5 main.py
+```
+
+## 2. Probar desde la terminal (para ver errores)
+
+```
+.\dist\MiApp.exe
+```
+
+## 3. Compilar version final (sin consola)
+
+```
+pyinstaller --clean --onefile --noconsole --name MiApp --hidden-import pyte --hidden-import wcwidth --hidden-import serial.tools.list_ports --exclude-module PyQt6 --exclude-module PyQt5 main.py
+```
+
+## Opciones utiles
+
+| Opcion | Para que sirve |
+|---|---|
+| `--clean` | Fuerza reanalisis (obligatorio si cambiaste opciones o modulos) |
+| `--onefile` | Un unico .exe (arranque mas lento). Sin esta opcion genera la carpeta `dist\MiApp\` |
+| `--noconsole` | Oculta la consola (usar solo cuando ya funciona) |
+| `--hidden-import X` | Incluye el modulo `X` si aparece `No module named 'X'` |
+| `--collect-all PySide6` | Incluye todo PySide6 (si faltan plugins o modulos de Qt; el exe pesa mas) |
+| `--add-data "recursos;recursos"` | Incluye carpetas o archivos extra (imagenes, .qss, etc.) |
+| `--icon=icono.ico` | Icono del ejecutable |
+
+## Compilar con el archivo .spec (recompilaciones rapidas)
+
+```
+pyinstaller --clean MiApp.spec
+```
+
+## Resultado
+
+- Ejecutable: `dist\MiApp.exe`
+- Carpetas `build\` y `MiApp.spec` son temporales/generadas y no se distribuyen.
+
+## PC destino
+
+- Windows 10/11 de 64 bits. No necesita Python ni PySide6.
+- Si da error de `VCRUNTIME140.dll`: instalar Visual C++ Redistributable x64.
+- Drivers de puerto serie (CH340, FTDI, etc.) deben estar instalados en esa PC.
+- Si el antivirus lo bloquea (falso positivo comun con `--onefile`): usar modo carpeta (sin `--onefile`) o agregar una excepcion.

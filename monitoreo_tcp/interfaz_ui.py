@@ -3,7 +3,7 @@
 ################################################################################
 ## Form generated from reading UI file 'interfaz.ui'
 ##
-## Created by: Qt User Interface Compiler version 6.11.2
+## Created by: Qt User Interface Compiler version 6.12.0
 ##
 ## WARNING! All changes made in this file will be lost when recompiling UI file!
 ################################################################################
@@ -29,7 +29,7 @@ class Ui_MainWindow(object):
     def setupUi(self, MainWindow):
         if not MainWindow.objectName():
             MainWindow.setObjectName(u"MainWindow")
-        MainWindow.resize(740, 626)
+        MainWindow.resize(726, 626)
         sizePolicy = QSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         sizePolicy.setHorizontalStretch(0)
         sizePolicy.setVerticalStretch(0)
@@ -151,6 +151,11 @@ class Ui_MainWindow(object):
 
         self.horizontalLayout_3.addItem(self.horizontalSpacer)
 
+        self.btnSeleccionarCarpeta = QPushButton(self.frame_4)
+        self.btnSeleccionarCarpeta.setObjectName(u"btnSeleccionarCarpeta")
+
+        self.horizontalLayout_3.addWidget(self.btnSeleccionarCarpeta)
+
         self.btn_grabar = QPushButton(self.frame_4)
         self.btn_grabar.setObjectName(u"btn_grabar")
         self.btn_grabar.setCheckable(True)
@@ -235,7 +240,16 @@ class Ui_MainWindow(object):
         self.plot_curva_container.setFrameShadow(QFrame.Shadow.Raised)
         self.horizontalLayout = QHBoxLayout(self.plot_curva_container)
         self.horizontalLayout.setObjectName(u"horizontalLayout")
-        self.tableCurva = QTableWidget(self.plot_curva_container)
+        self.frame = QFrame(self.plot_curva_container)
+        self.frame.setObjectName(u"frame")
+        sizePolicy1.setHeightForWidth(self.frame.sizePolicy().hasHeightForWidth())
+        self.frame.setSizePolicy(sizePolicy1)
+        self.frame.setMinimumSize(QSize(380, 0))
+        self.frame.setFrameShape(QFrame.Shape.StyledPanel)
+        self.frame.setFrameShadow(QFrame.Shadow.Raised)
+        self.verticalLayout_2 = QVBoxLayout(self.frame)
+        self.verticalLayout_2.setObjectName(u"verticalLayout_2")
+        self.tableCurva = QTableWidget(self.frame)
         self.tableCurva.setObjectName(u"tableCurva")
         sizePolicy2 = QSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Expanding)
         sizePolicy2.setHorizontalStretch(0)
@@ -243,17 +257,11 @@ class Ui_MainWindow(object):
         sizePolicy2.setHeightForWidth(self.tableCurva.sizePolicy().hasHeightForWidth())
         self.tableCurva.setSizePolicy(sizePolicy2)
         self.tableCurva.setMinimumSize(QSize(256, 0))
+        self.tableCurva.setRowCount(0)
+        self.tableCurva.setColumnCount(0)
 
-        self.horizontalLayout.addWidget(self.tableCurva)
+        self.verticalLayout_2.addWidget(self.tableCurva)
 
-        self.frame = QFrame(self.plot_curva_container)
-        self.frame.setObjectName(u"frame")
-        sizePolicy1.setHeightForWidth(self.frame.sizePolicy().hasHeightForWidth())
-        self.frame.setSizePolicy(sizePolicy1)
-        self.frame.setFrameShape(QFrame.Shape.StyledPanel)
-        self.frame.setFrameShadow(QFrame.Shadow.Raised)
-        self.verticalLayout_2 = QVBoxLayout(self.frame)
-        self.verticalLayout_2.setObjectName(u"verticalLayout_2")
         self.spinBoxCurveID = QSpinBox(self.frame)
         self.spinBoxCurveID.setObjectName(u"spinBoxCurveID")
 
@@ -301,7 +309,7 @@ class Ui_MainWindow(object):
         MainWindow.setCentralWidget(self.centralwidget)
         self.menubar = QMenuBar(MainWindow)
         self.menubar.setObjectName(u"menubar")
-        self.menubar.setGeometry(QRect(0, 0, 740, 33))
+        self.menubar.setGeometry(QRect(0, 0, 726, 33))
         MainWindow.setMenuBar(self.menubar)
         self.statusbar = QStatusBar(MainWindow)
         self.statusbar.setObjectName(u"statusbar")
@@ -323,11 +331,13 @@ class Ui_MainWindow(object):
         self.pushButton_2.setText(QCoreApplication.translate("MainWindow", u"Enviar", None))
         self.tabWidget.setTabText(self.tabWidget.indexOf(self.tab_terminal), QCoreApplication.translate("MainWindow", u"Comunicacion", None))
         self.btnToggleFiles.setText(QCoreApplication.translate("MainWindow", u"...", None))
+        self.btnSeleccionarCarpeta.setText(QCoreApplication.translate("MainWindow", u"Seleccionar carpeta de destino", None))
         self.btn_grabar.setText(QCoreApplication.translate("MainWindow", u"Iniciar grabacion", None))
         self.btnStop.setText(QCoreApplication.translate("MainWindow", u"Stop", None))
         self.btnCargarArchivo.setText(QCoreApplication.translate("MainWindow", u"Cargar CSV", None))
         self.btnRefrescarArchivos.setText(QCoreApplication.translate("MainWindow", u"Refrescar", None))
         self.tabWidget.setTabText(self.tabWidget.indexOf(self.tab_plots), QCoreApplication.translate("MainWindow", u"Graficos", None))
+        self.spinBoxCurveID.setSpecialValueText(QCoreApplication.translate("MainWindow", u"ID (1-99)", None))
         self.btnAgregarFila.setText(QCoreApplication.translate("MainWindow", u"Agregar fila", None))
         self.btnEliminarFila.setText(QCoreApplication.translate("MainWindow", u"Eliminar fila", None))
         self.btnEnviarCurva.setText(QCoreApplication.translate("MainWindow", u"Enviar", None))

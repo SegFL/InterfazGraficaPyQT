@@ -157,7 +157,7 @@ class MainApp(QMainWindow, Ui_MainWindow):
             1: {"style": Qt.DashLine, "suffix": "S1 (Punteado)"},
             2: {"style": Qt.DashDotLine, "suffix": "S2 (Raya-Punto)"},
         }
-
+        self.btnSeleccionarCarpeta.clicked.connect(self.seleccionar_carpeta)
         self.sensors_data = {}
 
         # Terminal retro
@@ -223,9 +223,18 @@ class MainApp(QMainWindow, Ui_MainWindow):
         self.btnEnviarCurva.clicked.connect(self.send_curve)
 
         self.btnToggleFiles.toggled.connect(self.toggle_file_panel)
+        self.btnToggleFiles.setCheckable(True)      # por si no lo marcaste en Designer
+        self.btnToggleFiles.setChecked(False)
+        self.toggle_file_panel(False)               # aplica oculto + flecha derecha
+        
+        if getattr(sys, 'frozen', False):
+            ruta_base = os.path.dirname(sys.executable)
+        else:
+            ruta_base = os.path.dirname(os.path.abspath(__file__))
 
-        self.carpeta_destino = os.path.join(os.path.dirname(os.path.abspath(__file__)), "DatosPy")
+        self.carpeta_destino = os.path.join(ruta_base, "DatosPy")
         os.makedirs(self.carpeta_destino, exist_ok=True)
+
         # 2. Configurar el botón de grabación
         self.btn_grabar.setCheckable(True)
         self.btn_grabar.setText("Iniciar Grabación")
@@ -255,6 +264,18 @@ class MainApp(QMainWindow, Ui_MainWindow):
         self.statusbar.showMessage("Grabación iniciada (archivos por sensor)")
         self.append_text(f"[REC] Grabación iniciada con timestamp: {self.timestamp_inicio}\n")
         return True
+
+    def seleccionar_carpeta(self):
+        carpeta = QFileDialog.getExistingDirectory(
+            self,
+            "Seleccionar carpeta de destino",
+            self.carpeta_destino
+        )
+
+        if carpeta:
+            self.carpeta_destino = carpeta
+            self.statusbar.showMessage(f"Carpeta de destino: {carpeta}")
+            self.append_text(f"[REC] Carpeta seleccionada: {carpeta}\n")
 
     def detener_grabacion(self):
         """Cierra todos los archivos CSV que estén abiertos."""
