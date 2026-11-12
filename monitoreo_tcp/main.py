@@ -65,26 +65,24 @@ class SerialReaderThread(QThread):
         if "*" not in line_str:
             return
         parts = line_str.split("*")[0].split(",")
-        if len(parts) < 5:
+        # [0]=tipo, [1]=ts_ms, [2]=I_mA, [3]=V, [4]=shunt_mV, [5]=P_mW, [6]=pin
+        if len(parts) < 7:
             return
         try:
-            time_sec = float(parts[1]) / 1000.0
+            time_sec    = float(parts[1]) / 1000.0
             i_corriente = float(parts[2])
-            v_tension = float(parts[3])
-            p_potencia = float(parts[4])
+            v_tension   = float(parts[3])
+            # parts[4] = shunt (mV): no se grafica
+            p_potencia  = float(parts[5])
 
-            sensor_id = 0
-            if len(parts) >= 7 and parts[6].strip().isdigit():
-                sensor_id = int(parts[6].strip())
-            elif len(parts) >= 6 and parts[5].strip().isdigit():
-                sensor_id = int(parts[5].strip())
+            pin = parts[6].strip()
+            sensor_id = int(pin) if pin.isdigit() else 0
 
             self.parsed_data_received.emit(
                 sensor_id, time_sec, v_tension, i_corriente, p_potencia
             )
         except ValueError:
             pass
-
     def _handle_line(self, line):
         rest = line
         m = DATA_RE.search(rest)
