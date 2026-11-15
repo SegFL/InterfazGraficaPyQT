@@ -8,11 +8,14 @@ import serial.tools.list_ports
 import re
 from collections import deque
 import queue
+import numpy as np
 from curve_sender import CurveSenderThread, verify_and_strip
 import pyqtgraph as pg
+from series_math import OPS, apply_op
 from PySide6.QtCore import QThread, Signal, Slot, QTimer, Qt
 from PySide6.QtGui import QTextCursor
 from PySide6.QtWidgets import QSplitter        # sumar al import existente
+
 from series_selector import SeriesSelector
 
 from PySide6.QtWidgets import (
@@ -31,6 +34,11 @@ from interfaz_ui import Ui_MainWindow
 DATA_RE = re.compile(r"0,\d+(?:,[-+]?\d+(?:\.\d+)?)+\*[0-9A-Fa-f]{2}")
 print(bool(DATA_RE.search('0,10593,-0.152,0.870,0.010,-0.132,1*37\r')))   # debe dar True
 PROTO_RE = re.compile(r"2,[^\r\n*]*\*[0-9A-Fa-f]{2}")
+
+
+MATH_OPS = {"sum": "+", "sub": "-", "mul": "*", "div": "/"}
+MAG_KEY = {"v": "tension", "i": "corriente", "p": "potencia"}
+MAG_LETTER = {"v": "V", "i": "I", "p": "P"}
 
 
 # ----------------------------------------------------------------------
@@ -138,6 +146,8 @@ class SerialReaderThread(QThread):
 # VENTANA PRINCIPAL
 # ----------------------------------------------------------------------
 class MainApp(QMainWindow, Ui_MainWindow):
+    MAG_KEY = {"v": "tension", "i": "corriente", "p": "potencia"}
+    MAG_LETTER = {"v": "V", "i": "I", "p": "P"}
     def __init__(self):
         super().__init__()
         self.setupUi(self)
@@ -199,6 +209,21 @@ class MainApp(QMainWindow, Ui_MainWindow):
         self.setup_curve_table()
         self.setup_curve_plot()
         self._setup_graph()
+
+        self._math_swapped = False
+        self._math_prev_sel = []
+        self._math_result = None
+        self.selector.changed.connect(self.refresh_math_operands)
+
+        self.btnMathSumar.clicked.connect(lambda: self.on_math_op("sum"))
+        self.btnMathRestar.clicked.connect(lambda: self.on_math_op("sub"))
+        self.btnMathMultiplicar.clicked.connect(lambda: self.on_math_op("mul"))
+        self.btnMathDividir.clicked.connect(lambda: self.on_math_op("div"))
+        self.btnMathSwap.clicked.connect(self.swap_math_operands)
+        self.btnMathMostrar.clicked.connect(self.show_math_result)
+        self.btnMathGuardarCSV.clicked.connect(self.save_math_result)
+        self.refresh_math_operands()
+
 
         self.btn_refresh.clicked.connect(self.refresh_ports)
         self.btnIniciar.clicked.connect(self.toggle_connection)
@@ -481,7 +506,8 @@ class MainApp(QMainWindow, Ui_MainWindow):
                 print(f"Error guardando muestra del sensor {sensor_id}: {e}")
 
 
-    def _get_or_create_sensor(self, sensor_id, suffix=None, colors=None, static=False):
+    def _get_or_create_sensor(self, sensor_id, suffix=None, colors=None,
+                          static=False, label=None, only=None):
         if sensor_id not in self.sensors_data:
             color_palette = {
                 0: ("#00ffff", "#ffff00", "#ff00ff"),
@@ -503,6 +529,9 @@ class MainApp(QMainWindow, Ui_MainWindow):
                 "i": f"Corriente - {suffix}",
                 "p": f"Potencia - {suffix}",
             }
+            if label:
+                names = {m: label for m in ("v", "i", "p")}
+    
 
             pen_tension = pg.mkPen(color=c_v, width=2, style=line_style)
             pen_corriente = pg.mkPen(color=c_i, width=2, style=line_style)
@@ -524,9 +553,10 @@ class MainApp(QMainWindow, Ui_MainWindow):
                 "static": static,
             }
 
-            self.selector.add_sensor(sensor_id)
+            self.selector.add_sensor(sensor_id, label=label, only=only)
             for m in ("v", "i", "p"):
                 self.apply_series_visibility(sensor_id, m)
+            self.refresh_math_operands()
 
         return self.sensors_data[sensor_id]
 
@@ -565,8 +595,9 @@ class MainApp(QMainWindow, Ui_MainWindow):
                 legend.removeItem(curve)
 
         self.selector.remove_sensor(sensor_id)
+        self.refresh_math_operands()
         self._update_axes_visibility()
-        self.statusbar.showMessage(f"Serie {sensor_id} eliminada")\
+        self.statusbar.showMessage(f"Serie {sensor_id} eliminada")
 
         
     def _update_axes_visibility(self):
@@ -597,6 +628,7 @@ class MainApp(QMainWindow, Ui_MainWindow):
                 self.buffer_size = new_size
 
                 for s in self.sensors_data.values():
+                    if s.get("static"): continue
                     s["time"] = deque(s["time"], maxlen=self.buffer_size)
                     s["tension"] = deque(s["tension"], maxlen=self.buffer_size)
                     s["corriente"] = deque(s["corriente"], maxlen=self.buffer_size)
@@ -673,18 +705,8 @@ class MainApp(QMainWindow, Ui_MainWindow):
         baud_text = self.comboBox_2.currentText()
         baud_rate = int(baud_text) if baud_text.isdigit() else 115200
         try:
-            if self.graph_widget and hasattr(self.graph_widget, "plotItem"):
-                legend = self.graph_widget.plotItem.legend
-                for s in self.sensors_data.values():
-                    c = s["curves"]
-                    self.graph_widget.removeItem(c["v"])
-                    self.vb2.removeItem(c["i"])
-                    self.vb3.removeItem(c["p"])
-                    if legend:
-                        for curve in c.values():
-                            legend.removeItem(curve)
-            
-            self.sensors_data.clear()
+            for sid in [k for k, v in self.sensors_data.items() if not v.get("static")]:
+                self.remove_sensor(sid)
             self.reset_terminal()
             self.serial_port = serial.Serial(port_name, baud_rate, timeout=0.1)
  
@@ -959,7 +981,102 @@ class MainApp(QMainWindow, Ui_MainWindow):
 
         self.graph_widget.autoRange()
         self.statusbar.showMessage(f"{len(paths)} archivo(s) cargado(s)")
+
+    def operand_label(self, sid, mag):
+        s = self.sensors_data[sid]
+        if s.get("expr"):                      # serie generada
+            return f"({s['expr']})"
+        return f"{self.MAG_LETTER[mag]}(S{sid})"
+
+    @Slot()
+    def refresh_math_operands(self, *_):
+        sel = self.selector.checked()
+        if sel != self._math_prev_sel:
+            self._math_swapped = False
+            self._math_prev_sel = sel
+        n = len(sel)
+        if n == 0:
+            txt = "Operandos: (seleccioná hasta 2 series)"
+        elif n > 2:
+            txt = f"Operandos: {n} series tildadas, dejá como máximo 2"
+        else:
+            ops = sel[::-1] if self._math_swapped else sel
+            names = [self.operand_label(*o) for o in ops]
+            txt = "A: " + names[0] + (f"    B: {names[1]}" if n == 2 else "")
+        self.lblMathOperandos.setText(txt)
+        self.btnMathSwap.setEnabled(n == 2)
+
+    def swap_math_operands(self):
+        self._math_swapped = not self._math_swapped
+        self.refresh_math_operands()
+
+    @Slot(str)
+    def on_math_op(self, op):
+        sel = self.selector.checked()
+        if len(sel) != 2:
+            self.statusbar.showMessage("Tildá exactamente 2 series para operar")
+            return
+        if self._math_swapped:
+            sel = sel[::-1]
+        (sa, ma), (sb, mb) = sel
+        A, B = self.sensors_data[sa], self.sensors_data[sb]
+        ta = np.asarray(A["time"], float)
+        ya = np.asarray(A[self.MAG_KEY[ma]], float)
+        yb = np.asarray(B[self.MAG_KEY[mb]], float)
+        if len(ya) == 0 or len(yb) == 0:
+            self.statusbar.showMessage("Alguna de las series no tiene datos")
+            return
+
+        n, y = apply_op(op, ya, yb)             # sin alinear tiempos (por ahora)
+        ta = ta[:n]
+
+        name = f"{self.operand_label(sa, ma)}{OPS[op][0]}{self.operand_label(sb, mb)}"
+        generic = not (op in ("sum", "sub") and ma == mb)
+        self._math_result = {"t": ta, "y": y, "mag": ma, "name": name, "generic": generic}
+
+        self.lineEditNombreSerie.setText(name)
+        for w in (self.lineEditNombreSerie, self.btnMathMostrar, self.btnMathGuardarCSV):
+            w.setEnabled(True)
+        self.statusbar.showMessage(f"Calculado: {name} ({n} puntos)")
         
+    def show_math_result(self):
+        r = self._math_result
+        if r is None:
+            return
+        name = self.lineEditNombreSerie.text().strip() or r["name"]
+        sid = 1000
+        while sid in self.sensors_data:
+            sid += 1
+        s = self._get_or_create_sensor(sid, label=name, only=r["mag"], static=True)
+        n = len(r["y"])
+        s["time"] = deque(r["t"].tolist(), maxlen=n)
+        s[self.MAG_KEY[r["mag"]]] = deque(r["y"].tolist(), maxlen=n)
+        s["expr"] = name
+        s["generic"] = r["generic"]
+        s["curves"][r["mag"]].setData(r["t"], r["y"])
+        self.graph_widget.autoRange()
+        self.statusbar.showMessage(f"Serie '{name}' agregada")
+
+    def save_math_result(self):
+        r = self._math_result
+        if r is None:
+            return
+        name = self.lineEditNombreSerie.text().strip() or r["name"]
+        safe = re.sub(r'[\\/:*?"<>|]', "_", name)
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Guardar serie", os.path.join(self.carpeta_destino, safe + ".csv"),
+            "CSV (*.csv)")
+        if not path:
+            return
+        col = {"v": 1, "i": 2, "p": 3}[r["mag"]]
+        with open(path, "w", newline="", encoding="utf-8") as f:
+            w = csv.writer(f, delimiter=";")
+            w.writerow(["Tiempo_s", "Tension_V", "Corriente_mA", "Potencia_mW"])
+            for t, y in zip(r["t"], r["y"]):
+                row = [f"{t:.3f}", "nan", "nan", "nan"]
+                row[col] = f"{y:.6g}"
+                w.writerow(row)
+        self.statusbar.showMessage(f"Guardado: {path}")
         
     def send_data(self):
         if self.serial_port and self.serial_port.is_open and self.input_send_widget:

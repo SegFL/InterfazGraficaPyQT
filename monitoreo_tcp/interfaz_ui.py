@@ -3,7 +3,7 @@
 ################################################################################
 ## Form generated from reading UI file 'interfaz.ui'
 ##
-## Created by: Qt User Interface Compiler version 6.12.0
+## Created by: Qt User Interface Compiler version 6.11.2
 ##
 ## WARNING! All changes made in this file will be lost when recompiling UI file!
 ################################################################################
@@ -15,12 +15,12 @@ from PySide6.QtGui import (QBrush, QColor, QConicalGradient, QCursor,
     QFont, QFontDatabase, QGradient, QIcon,
     QImage, QKeySequence, QLinearGradient, QPainter,
     QPalette, QPixmap, QRadialGradient, QTransform)
-from PySide6.QtWidgets import (QApplication, QComboBox, QFrame, QHBoxLayout,
-    QHeaderView, QLabel, QLineEdit, QMainWindow,
-    QMenuBar, QPushButton, QSizePolicy, QSpacerItem,
-    QSpinBox, QStatusBar, QTabWidget, QTableWidget,
-    QTableWidgetItem, QTextEdit, QToolButton, QVBoxLayout,
-    QWidget)
+from PySide6.QtWidgets import (QApplication, QComboBox, QFrame, QGridLayout,
+    QHBoxLayout, QHeaderView, QLabel, QLineEdit,
+    QMainWindow, QMenuBar, QPushButton, QSizePolicy,
+    QSpacerItem, QSpinBox, QStatusBar, QTabWidget,
+    QTableWidget, QTableWidgetItem, QTextEdit, QToolButton,
+    QVBoxLayout, QWidget)
 
 from pyqtgraph import PlotWidget
 from series_selector import SeriesSelector
@@ -29,7 +29,7 @@ class Ui_MainWindow(object):
     def setupUi(self, MainWindow):
         if not MainWindow.objectName():
             MainWindow.setObjectName(u"MainWindow")
-        MainWindow.resize(726, 626)
+        MainWindow.resize(650, 626)
         sizePolicy = QSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         sizePolicy.setHorizontalStretch(0)
         sizePolicy.setVerticalStretch(0)
@@ -147,6 +147,13 @@ class Ui_MainWindow(object):
 
         self.horizontalLayout_3.addWidget(self.btnToggleFiles)
 
+        self.btnToggleMath = QToolButton(self.frame_4)
+        self.btnToggleMath.setObjectName(u"btnToggleMath")
+        self.btnToggleMath.setCheckable(True)
+        self.btnToggleMath.setArrowType(Qt.ArrowType.RightArrow)
+
+        self.horizontalLayout_3.addWidget(self.btnToggleMath)
+
         self.horizontalSpacer = QSpacerItem(40, 20, QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum)
 
         self.horizontalLayout_3.addItem(self.horizontalSpacer)
@@ -213,6 +220,71 @@ class Ui_MainWindow(object):
         self.verticalLayout_4.setObjectName(u"verticalLayout_4")
 
         self.horizontalLayout_4.addWidget(self.layout_plots)
+
+        self.framePanelMath = QFrame(self.frame_5)
+        self.framePanelMath.setObjectName(u"framePanelMath")
+        self.framePanelMath.setFrameShape(QFrame.Shape.StyledPanel)
+        self.framePanelMath.setFrameShadow(QFrame.Shadow.Raised)
+        self.gridLayout = QGridLayout(self.framePanelMath)
+        self.gridLayout.setObjectName(u"gridLayout")
+        self.label_2 = QLabel(self.framePanelMath)
+        self.label_2.setObjectName(u"label_2")
+
+        self.gridLayout.addWidget(self.label_2, 1, 0, 1, 1)
+
+        self.btnMathRestar = QPushButton(self.framePanelMath)
+        self.btnMathRestar.setObjectName(u"btnMathRestar")
+
+        self.gridLayout.addWidget(self.btnMathRestar, 0, 1, 1, 1)
+
+        self.btnMathDividir = QPushButton(self.framePanelMath)
+        self.btnMathDividir.setObjectName(u"btnMathDividir")
+
+        self.gridLayout.addWidget(self.btnMathDividir, 0, 2, 1, 1)
+
+        self.btnMathMultiplicar = QPushButton(self.framePanelMath)
+        self.btnMathMultiplicar.setObjectName(u"btnMathMultiplicar")
+
+        self.gridLayout.addWidget(self.btnMathMultiplicar, 0, 3, 1, 1)
+
+        self.btnMathSumar = QPushButton(self.framePanelMath)
+        self.btnMathSumar.setObjectName(u"btnMathSumar")
+
+        self.gridLayout.addWidget(self.btnMathSumar, 0, 0, 1, 1)
+
+        self.lineEditNombreSerie = QLineEdit(self.framePanelMath)
+        self.lineEditNombreSerie.setObjectName(u"lineEditNombreSerie")
+        self.lineEditNombreSerie.setEnabled(False)
+        self.lineEditNombreSerie.setClearButtonEnabled(True)
+
+        self.gridLayout.addWidget(self.lineEditNombreSerie, 1, 1, 1, 1)
+
+        self.btnMathMostrar = QPushButton(self.framePanelMath)
+        self.btnMathMostrar.setObjectName(u"btnMathMostrar")
+        self.btnMathMostrar.setEnabled(False)
+
+        self.gridLayout.addWidget(self.btnMathMostrar, 2, 0, 1, 1)
+
+        self.btnMathGuardarCSV = QPushButton(self.framePanelMath)
+        self.btnMathGuardarCSV.setObjectName(u"btnMathGuardarCSV")
+        self.btnMathGuardarCSV.setEnabled(False)
+
+        self.gridLayout.addWidget(self.btnMathGuardarCSV, 2, 1, 1, 1)
+
+        self.btnMathSwap = QPushButton(self.framePanelMath)
+        self.btnMathSwap.setObjectName(u"btnMathSwap")
+        self.btnMathSwap.setEnabled(False)
+
+        self.gridLayout.addWidget(self.btnMathSwap, 2, 2, 1, 1)
+
+        self.lblMathOperandos = QLabel(self.framePanelMath)
+        self.lblMathOperandos.setObjectName(u"lblMathOperandos")
+        self.lblMathOperandos.setWordWrap(True)
+
+        self.gridLayout.addWidget(self.lblMathOperandos, 3, 1, 1, 1)
+
+
+        self.horizontalLayout_4.addWidget(self.framePanelMath)
 
         self.containerSelector = SeriesSelector(self.frame_5)
         self.containerSelector.setObjectName(u"containerSelector")
@@ -309,7 +381,7 @@ class Ui_MainWindow(object):
         MainWindow.setCentralWidget(self.centralwidget)
         self.menubar = QMenuBar(MainWindow)
         self.menubar.setObjectName(u"menubar")
-        self.menubar.setGeometry(QRect(0, 0, 726, 33))
+        self.menubar.setGeometry(QRect(0, 0, 650, 33))
         MainWindow.setMenuBar(self.menubar)
         self.statusbar = QStatusBar(MainWindow)
         self.statusbar.setObjectName(u"statusbar")
@@ -331,11 +403,28 @@ class Ui_MainWindow(object):
         self.pushButton_2.setText(QCoreApplication.translate("MainWindow", u"Enviar", None))
         self.tabWidget.setTabText(self.tabWidget.indexOf(self.tab_terminal), QCoreApplication.translate("MainWindow", u"Comunicacion", None))
         self.btnToggleFiles.setText(QCoreApplication.translate("MainWindow", u"...", None))
+        self.btnToggleMath.setText(QCoreApplication.translate("MainWindow", u"Matematica", None))
         self.btnSeleccionarCarpeta.setText(QCoreApplication.translate("MainWindow", u"Seleccionar carpeta de destino", None))
         self.btn_grabar.setText(QCoreApplication.translate("MainWindow", u"Iniciar grabacion", None))
         self.btnStop.setText(QCoreApplication.translate("MainWindow", u"Stop", None))
         self.btnCargarArchivo.setText(QCoreApplication.translate("MainWindow", u"Cargar CSV", None))
         self.btnRefrescarArchivos.setText(QCoreApplication.translate("MainWindow", u"Refrescar", None))
+        self.label_2.setText(QCoreApplication.translate("MainWindow", u"Nombre", None))
+        self.btnMathRestar.setText(QCoreApplication.translate("MainWindow", u"Restar", None))
+        self.btnMathDividir.setText(QCoreApplication.translate("MainWindow", u"Dividir", None))
+        self.btnMathMultiplicar.setText(QCoreApplication.translate("MainWindow", u"Multiplicar", None))
+        self.btnMathSumar.setText(QCoreApplication.translate("MainWindow", u"Sumar", None))
+        self.lineEditNombreSerie.setPlaceholderText(QCoreApplication.translate("MainWindow", u"ej: V(S1000)+V(S1001)", None))
+#if QT_CONFIG(tooltip)
+        self.btnMathMostrar.setToolTip(QCoreApplication.translate("MainWindow", u"Agregar la serie calculada a \"Series visibles\" y al gr\u00e1fico", None))
+#endif // QT_CONFIG(tooltip)
+        self.btnMathMostrar.setText(QCoreApplication.translate("MainWindow", u"Guardar", None))
+        self.btnMathGuardarCSV.setText(QCoreApplication.translate("MainWindow", u"Guardar CSV", None))
+#if QT_CONFIG(tooltip)
+        self.btnMathSwap.setToolTip(QCoreApplication.translate("MainWindow", u"Invertir el orden de los operandos (importa en resta y divisi\u00f3n)", None))
+#endif // QT_CONFIG(tooltip)
+        self.btnMathSwap.setText(QCoreApplication.translate("MainWindow", u"A \u21c4 B", None))
+        self.lblMathOperandos.setText(QCoreApplication.translate("MainWindow", u"Operandos: (seleccion\u00e1 hasta 2 series)", None))
         self.tabWidget.setTabText(self.tabWidget.indexOf(self.tab_plots), QCoreApplication.translate("MainWindow", u"Graficos", None))
         self.spinBoxCurveID.setSpecialValueText(QCoreApplication.translate("MainWindow", u"ID (1-99)", None))
         self.btnAgregarFila.setText(QCoreApplication.translate("MainWindow", u"Agregar fila", None))

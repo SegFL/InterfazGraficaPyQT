@@ -6,7 +6,7 @@
    <rect>
     <x>0</x>
     <y>0</y>
-    <width>726</width>
+    <width>650</width>
     <height>626</height>
    </rect>
   </property>
@@ -189,6 +189,19 @@
                   </widget>
                  </item>
                  <item>
+                  <widget class="QToolButton" name="btnToggleMath">
+                   <property name="text">
+                    <string>Matematica</string>
+                   </property>
+                   <property name="checkable">
+                    <bool>true</bool>
+                   </property>
+                   <property name="arrowType">
+                    <enum>Qt::ArrowType::RightArrow</enum>
+                   </property>
+                  </widget>
+                 </item>
+                 <item>
                   <spacer name="horizontalSpacer">
                    <property name="orientation">
                     <enum>Qt::Orientation::Horizontal</enum>
@@ -282,6 +295,112 @@
                     </sizepolicy>
                    </property>
                    <layout class="QVBoxLayout" name="verticalLayout_4"/>
+                  </widget>
+                 </item>
+                 <item>
+                  <widget class="QFrame" name="framePanelMath">
+                   <property name="frameShape">
+                    <enum>QFrame::Shape::StyledPanel</enum>
+                   </property>
+                   <property name="frameShadow">
+                    <enum>QFrame::Shadow::Raised</enum>
+                   </property>
+                   <layout class="QGridLayout" name="gridLayout">
+                    <item row="1" column="0">
+                     <widget class="QLabel" name="label_2">
+                      <property name="text">
+                       <string>Nombre</string>
+                      </property>
+                     </widget>
+                    </item>
+                    <item row="0" column="1">
+                     <widget class="QPushButton" name="btnMathRestar">
+                      <property name="text">
+                       <string>Restar</string>
+                      </property>
+                     </widget>
+                    </item>
+                    <item row="0" column="2">
+                     <widget class="QPushButton" name="btnMathDividir">
+                      <property name="text">
+                       <string>Dividir</string>
+                      </property>
+                     </widget>
+                    </item>
+                    <item row="0" column="3">
+                     <widget class="QPushButton" name="btnMathMultiplicar">
+                      <property name="text">
+                       <string>Multiplicar</string>
+                      </property>
+                     </widget>
+                    </item>
+                    <item row="0" column="0">
+                     <widget class="QPushButton" name="btnMathSumar">
+                      <property name="text">
+                       <string>Sumar</string>
+                      </property>
+                     </widget>
+                    </item>
+                    <item row="1" column="1">
+                     <widget class="QLineEdit" name="lineEditNombreSerie">
+                      <property name="enabled">
+                       <bool>false</bool>
+                      </property>
+                      <property name="placeholderText">
+                       <string>ej: V(S1000)+V(S1001)</string>
+                      </property>
+                      <property name="clearButtonEnabled">
+                       <bool>true</bool>
+                      </property>
+                     </widget>
+                    </item>
+                    <item row="2" column="0">
+                     <widget class="QPushButton" name="btnMathMostrar">
+                      <property name="enabled">
+                       <bool>false</bool>
+                      </property>
+                      <property name="toolTip">
+                       <string>Agregar la serie calculada a &quot;Series visibles&quot; y al gráfico</string>
+                      </property>
+                      <property name="text">
+                       <string>Guardar</string>
+                      </property>
+                     </widget>
+                    </item>
+                    <item row="2" column="1">
+                     <widget class="QPushButton" name="btnMathGuardarCSV">
+                      <property name="enabled">
+                       <bool>false</bool>
+                      </property>
+                      <property name="text">
+                       <string>Guardar CSV</string>
+                      </property>
+                     </widget>
+                    </item>
+                    <item row="2" column="2">
+                     <widget class="QPushButton" name="btnMathSwap">
+                      <property name="enabled">
+                       <bool>false</bool>
+                      </property>
+                      <property name="toolTip">
+                       <string>Invertir el orden de los operandos (importa en resta y división)</string>
+                      </property>
+                      <property name="text">
+                       <string>A ⇄ B</string>
+                      </property>
+                     </widget>
+                    </item>
+                    <item row="3" column="1">
+                     <widget class="QLabel" name="lblMathOperandos">
+                      <property name="text">
+                       <string>Operandos: (seleccioná hasta 2 series)</string>
+                      </property>
+                      <property name="wordWrap">
+                       <bool>true</bool>
+                      </property>
+                     </widget>
+                    </item>
+                   </layout>
                   </widget>
                  </item>
                  <item>
@@ -435,7 +554,7 @@
     <rect>
      <x>0</x>
      <y>0</y>
-     <width>726</width>
+     <width>650</width>
      <height>33</height>
     </rect>
    </property>

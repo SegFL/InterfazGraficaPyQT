@@ -51,16 +51,20 @@ class SeriesSelector(QGroupBox):
             lbl.setToolTip(tip)
             lbl.setAlignment(Qt.AlignCenter)
             self._grid.addWidget(lbl, 0, col)
-
-    def add_sensor(self, sensor_id: int):
+            
+    def add_sensor(self, sensor_id: int, label: str = None, only: str = None):
         if sensor_id in self._rows:
             return
-        label = QLabel(f"S{sensor_id}")
+        lbl = QLabel(label or f"S{sensor_id}")
+        if label:
+            lbl.setToolTip(label)
         boxes = {}
         for mag, _, tip in MAGNITUDES:
             cb = QCheckBox()
-            cb.setChecked(True)
-            cb.setToolTip(f"{tip} - sensor {sensor_id}")
+            en = only is None or mag == only
+            cb.setChecked(en)
+            cb.setEnabled(en)
+            cb.setToolTip(f"{tip} - {label or f'sensor {sensor_id}'}")
             cb.toggled.connect(
                 lambda chk, s=sensor_id, m=mag: self.changed.emit(s, m, chk)
             )
@@ -68,11 +72,28 @@ class SeriesSelector(QGroupBox):
 
         btn_remove = QPushButton("✕")
         btn_remove.setFixedWidth(24)
-        btn_remove.setToolTip(f"Quitar sensor {sensor_id}")
+        btn_remove.setToolTip(f"Quitar {label or f'sensor {sensor_id}'}")
         btn_remove.clicked.connect(lambda: self.remove_requested.emit(sensor_id))
 
-        self._rows[sensor_id] = (label, boxes, btn_remove)
+        self._rows[sensor_id] = (lbl, boxes, btn_remove)
         self._relayout()
+
+    def set_all(self, state: bool):
+        for _, boxes, _ in self._rows.values():
+            for cb in boxes.values():
+                if cb.isEnabled():
+                    cb.setChecked(state)
+
+    def checked(self):
+        """Lista ordenada de (sensor_id, magnitud) tildadas."""
+        return [(sid, m) for sid in sorted(self._rows)
+                for m, cb in self._rows[sid][1].items() if cb.isChecked()]
+                
+    def checked(self):
+        """Lista ordenada de (sensor_id, magnitud) tildadas."""
+        return [(sid, m) for sid in sorted(self._rows)
+                for m, cb in self._rows[sid][1].items() if cb.isChecked()]
+
 
     def remove_sensor(self, sensor_id: int):
         row = self._rows.pop(sensor_id, None)
