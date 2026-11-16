@@ -404,7 +404,20 @@
                   </widget>
                  </item>
                  <item>
-                  <widget class="SeriesSelector" name="containerSelector" native="true"/>
+                  <widget class="SeriesSelector" name="containerSelector" native="true">
+                   <property name="sizePolicy">
+                    <sizepolicy hsizetype="Preferred" vsizetype="Preferred">
+                     <horstretch>0</horstretch>
+                     <verstretch>0</verstretch>
+                    </sizepolicy>
+                   </property>
+                   <property name="maximumSize">
+                    <size>
+                     <width>300</width>
+                     <height>16777215</height>
+                    </size>
+                   </property>
+                  </widget>
                  </item>
                 </layout>
                </widget>

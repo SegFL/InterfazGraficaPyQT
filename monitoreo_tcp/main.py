@@ -274,7 +274,12 @@ class MainApp(QMainWindow, Ui_MainWindow):
         self.btnToggleFiles.setCheckable(True)      # por si no lo marcaste en Designer
         self.btnToggleFiles.setChecked(False)
         self.toggle_file_panel(False)               # aplica oculto + flecha derecha
-        
+
+        self.btnToggleMath.setCheckable(True)       # por si no lo marcaste en Designer
+        self.btnToggleMath.toggled.connect(self.toggle_math_panel)
+        self.btnToggleMath.setChecked(False)
+        self.toggle_math_panel(False)   
+
         if getattr(sys, 'frozen', False):
             ruta_base = os.path.dirname(sys.executable)
         else:
@@ -345,6 +350,11 @@ class MainApp(QMainWindow, Ui_MainWindow):
         self.framePanelArchivos.setVisible(checked)
         self.btnToggleFiles.setArrowType(Qt.DownArrow if checked else Qt.RightArrow)
 
+    def toggle_math_panel(self, checked):
+        self.framePanelMath.setVisible(checked)
+        if hasattr(self.btnToggleMath, "setArrowType"):   # solo QToolButton
+            self.btnToggleMath.setArrowType(Qt.DownArrow if checked else Qt.RightArrow)
+            
     def setup_curve_table(self):
 
         self.tableCurva.setColumnCount(3)
