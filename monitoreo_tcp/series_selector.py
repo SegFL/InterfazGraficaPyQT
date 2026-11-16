@@ -1,25 +1,43 @@
 """
 series_selector.py
-Matriz de checkboxes (filas = sensores, columnas = V / I / P) para elegir
-qué series se grafican. Las filas se agregan dinámicamente cuando aparece
-un sensor nuevo y quedan ordenadas por ID.
+Arbol de series visibles: un grupo por sensor / archivo y, debajo, una fila
+tildable por cada serie (columna del CSV) con su unidad.
+
+    v S1000 (legacy.csv)                     x
+        [x] Tension [V]
+        [x] Corriente [mA]
+    v V(S1000)+V(S1001)                      x
+        [x] Tension [V]
+
+API (compatible con la version de matriz):
+    add_sensor(sensor_id, label=None, series=None)
+    remove_sensor(sensor_id)
+    is_visible(sensor_id, key) -> bool
+    set_all(state)
+    checked() -> [(sensor_id, key), ...]
+Senales:
+    changed(sensor_id, key, visible)
+    remove_requested(sensor_id)
 """
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
-    QCheckBox,
-    QGridLayout,
     QGroupBox,
     QHBoxLayout,
-    QLabel,
+    QHeaderView,
     QPushButton,
+    QTreeWidget,
+    QTreeWidgetItem,
     QVBoxLayout,
 )
 
-MAGNITUDES = (
-    ("v", "V", "Tensión"),
-    ("i", "I", "Corriente"),
-    ("p", "P", "Potencia"),
+# Series de la ESP32 (clave, texto de la fila)
+DEFAULT_SERIES = (
+    ("voltage", "Tensión [V]"),
+    ("current", "Corriente [mA]"),
+    ("power", "Potencia [mW]"),
 )
+
+_ROLE = Qt.UserRole
 
 
 class SeriesSelector(QGroupBox):
@@ -28,12 +46,23 @@ class SeriesSelector(QGroupBox):
 
     def __init__(self, parent=None):
         super().__init__("Series visibles", parent)
-        self._rows = {}
+        self._groups = {}            # sensor_id -> QTreeWidgetItem (grupo)
 
         outer = QVBoxLayout(self)
-        self._grid = QGridLayout()
-        self._grid.setHorizontalSpacing(14)
-        outer.addLayout(self._grid)
+
+        self._tree = QTreeWidget()
+        self._tree.setColumnCount(2)
+        self._tree.setHeaderHidden(True)
+        self._tree.setRootIsDecorated(True)
+        self._tree.setUniformRowHeights(True)
+        self._tree.setMinimumWidth(220)
+        hdr = self._tree.header()
+        hdr.setStretchLastSection(False)
+        hdr.setSectionResizeMode(0, QHeaderView.Stretch)
+        hdr.setSectionResizeMode(1, QHeaderView.Fixed)
+        self._tree.setColumnWidth(1, 28)
+        self._tree.itemChanged.connect(self._on_item_changed)
+        outer.addWidget(self._tree, 1)
 
         buttons = QHBoxLayout()
         b_all = QPushButton("Todas")
@@ -43,84 +72,84 @@ class SeriesSelector(QGroupBox):
         buttons.addWidget(b_all)
         buttons.addWidget(b_none)
         outer.addLayout(buttons)
-        outer.addStretch(1)
 
-        self._grid.addWidget(QLabel("Sensor"), 0, 0)
-        for col, (_, txt, tip) in enumerate(MAGNITUDES, start=1):
-            lbl = QLabel(txt)
-            lbl.setToolTip(tip)
-            lbl.setAlignment(Qt.AlignCenter)
-            self._grid.addWidget(lbl, 0, col)
-            
-    def add_sensor(self, sensor_id: int, label: str = None, only: str = None):
-        if sensor_id in self._rows:
+    # -- API ------------------------------------------------------------
+    def add_sensor(self, sensor_id: int, label: str = None, series=None):
+        """series: iterable de (clave, texto). Por defecto V / I / P."""
+        if sensor_id in self._groups:
             return
-        lbl = QLabel(label or f"S{sensor_id}")
-        if label:
-            lbl.setToolTip(label)
-        boxes = {}
-        for mag, _, tip in MAGNITUDES:
-            cb = QCheckBox()
-            en = only is None or mag == only
-            cb.setChecked(en)
-            cb.setEnabled(en)
-            cb.setToolTip(f"{tip} - {label or f'sensor {sensor_id}'}")
-            cb.toggled.connect(
-                lambda chk, s=sensor_id, m=mag: self.changed.emit(s, m, chk)
-            )
-            boxes[mag] = cb
+        title = label or f"S{sensor_id}"
 
-        btn_remove = QPushButton("✕")
-        btn_remove.setFixedWidth(24)
-        btn_remove.setToolTip(f"Quitar {label or f'sensor {sensor_id}'}")
-        btn_remove.clicked.connect(lambda: self.remove_requested.emit(sensor_id))
+        self._tree.blockSignals(True)
+        group = QTreeWidgetItem()
+        group.setText(0, title)
+        group.setToolTip(0, title)
+        group.setFlags(
+            Qt.ItemIsEnabled | Qt.ItemIsUserCheckable | Qt.ItemIsAutoTristate
+        )
+        group.setData(0, _ROLE, None)
 
-        self._rows[sensor_id] = (lbl, boxes, btn_remove)
-        self._relayout()
+        for key, text in (series if series is not None else DEFAULT_SERIES):
+            child = QTreeWidgetItem(group)
+            child.setText(0, text)
+            child.setToolTip(0, f"{text} - {title}")
+            child.setFlags(Qt.ItemIsEnabled | Qt.ItemIsUserCheckable)
+            child.setCheckState(0, Qt.Checked)
+            child.setData(0, _ROLE, (sensor_id, key))
 
-    def set_all(self, state: bool):
-        for _, boxes, _ in self._rows.values():
-            for cb in boxes.values():
-                if cb.isEnabled():
-                    cb.setChecked(state)
+        index = sum(1 for sid in self._groups if sid < sensor_id)
+        self._tree.insertTopLevelItem(index, group)
+        group.setExpanded(True)
+        self._groups[sensor_id] = group
 
-    def checked(self):
-        """Lista ordenada de (sensor_id, magnitud) tildadas."""
-        return [(sid, m) for sid in sorted(self._rows)
-                for m, cb in self._rows[sid][1].items() if cb.isChecked()]
-                
-    def checked(self):
-        """Lista ordenada de (sensor_id, magnitud) tildadas."""
-        return [(sid, m) for sid in sorted(self._rows)
-                for m, cb in self._rows[sid][1].items() if cb.isChecked()]
-
+        btn = QPushButton("✕")
+        btn.setFixedWidth(24)
+        btn.setToolTip(f"Quitar {title}")
+        btn.clicked.connect(lambda: self.remove_requested.emit(sensor_id))
+        self._tree.setItemWidget(group, 1, btn)
+        self._tree.blockSignals(False)
 
     def remove_sensor(self, sensor_id: int):
-        row = self._rows.pop(sensor_id, None)
-        if row is None:
+        group = self._groups.pop(sensor_id, None)
+        if group is None:
             return
-        label, boxes, btn_remove = row
-        for w in (label, *boxes.values(), btn_remove):
-            self._grid.removeWidget(w)
-            w.deleteLater()
-        self._relayout()
+        self._tree.takeTopLevelItem(self._tree.indexOfTopLevelItem(group))
 
-    def is_visible(self, sensor_id: int, mag: str) -> bool:
-        row = self._rows.get(sensor_id)
-        return True if row is None else row[1][mag].isChecked()
+    def is_visible(self, sensor_id: int, key: str) -> bool:
+        item = self._find(sensor_id, key)
+        return True if item is None else item.checkState(0) == Qt.Checked
 
     def set_all(self, state: bool):
-        for _, boxes, _ in self._rows.values():
-            for cb in boxes.values():
-                cb.setChecked(state)
+        st = Qt.Checked if state else Qt.Unchecked
+        for group in self._groups.values():
+            for i in range(group.childCount()):
+                group.child(i).setCheckState(0, st)
 
-    def _relayout(self):
-        for row, sid in enumerate(sorted(self._rows), start=1):
-            label, boxes, btn_remove = self._rows[sid]
-            self._grid.removeWidget(label)
-            self._grid.addWidget(label, row, 0)
-            for col, (mag, _, _) in enumerate(MAGNITUDES, start=1):
-                self._grid.removeWidget(boxes[mag])
-                self._grid.addWidget(boxes[mag], row, col, alignment=Qt.AlignCenter)
-            self._grid.removeWidget(btn_remove)
-            self._grid.addWidget(btn_remove, row, len(MAGNITUDES) + 1)
+    def checked(self):
+        """Lista ordenada de (sensor_id, clave) tildadas."""
+        out = []
+        for sid in sorted(self._groups):
+            g = self._groups[sid]
+            for i in range(g.childCount()):
+                c = g.child(i)
+                if c.checkState(0) == Qt.Checked:
+                    out.append(c.data(0, _ROLE))
+        return out
+
+    # -- interno ----------------------------------------------------------
+    def _find(self, sensor_id, key):
+        g = self._groups.get(sensor_id)
+        if g is None:
+            return None
+        for i in range(g.childCount()):
+            c = g.child(i)
+            if c.data(0, _ROLE) == (sensor_id, key):
+                return c
+        return None
+
+    def _on_item_changed(self, item, column):
+        if column != 0 or item.parent() is None:
+            return                       # solo filas de serie, no el grupo
+        data = item.data(0, _ROLE)
+        if data:
+            self.changed.emit(data[0], data[1], item.checkState(0) == Qt.Checked)

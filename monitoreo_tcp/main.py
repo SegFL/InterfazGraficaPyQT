@@ -11,7 +11,8 @@ import queue
 import numpy as np
 from curve_sender import CurveSenderThread, verify_and_strip
 import pyqtgraph as pg
-from series_math import OPS, apply_op
+from series_math import OPS, apply_op, result_unit, unit_warning
+from series_model import read_csv, axis_slot
 from PySide6.QtCore import QThread, Signal, Slot, QTimer, Qt
 from PySide6.QtGui import QTextCursor
 from PySide6.QtWidgets import QSplitter        # sumar al import existente
@@ -36,9 +37,32 @@ print(bool(DATA_RE.search('0,10593,-0.152,0.870,0.010,-0.132,1*37\r')))   # debe
 PROTO_RE = re.compile(r"2,[^\r\n*]*\*[0-9A-Fa-f]{2}")
 
 
-MATH_OPS = {"sum": "+", "sub": "-", "mul": "*", "div": "/"}
-MAG_KEY = {"v": "tension", "i": "corriente", "p": "potencia"}
-MAG_LETTER = {"v": "V", "i": "I", "p": "P"}
+# Series de la ESP32: (clave, nombre, unidad)
+LIVE_SERIES = (
+    ("voltage", "Tensión", "V"),
+    ("current", "Corriente", "mA"),
+    ("power", "Potencia", "mW"),
+)
+# Nombre para mostrar (con tildes) de las magnitudes conocidas
+DISPLAY_NAME = {
+    "voltage": "Tensión",
+    "vbus": "Tensión de bus",
+    "current": "Corriente",
+    "power": "Potencia",
+}
+# Letra para nombrar operandos, ej. V(S1000)
+MAG_LETTER = {"voltage": "V", "current": "I", "power": "P", "vbus": "Vbus"}
+# Los sensores 0-2 conservan su paleta original (V, I, P)
+LEGACY_COLORS = {
+    0: {"voltage": "#00ffff", "current": "#ffff00", "power": "#ff00ff"},
+    1: {"voltage": "#00ff00", "current": "#ff8800", "power": "#ff0055"},
+    2: {"voltage": "#3388ff", "current": "#ffcc00", "power": "#cc00ff"},
+}
+# Resto de las series (CSV, generadas, otras magnitudes): se reparten en ciclo
+EXTRA_COLORS = [
+    "#00ffff", "#ffff00", "#ff00ff", "#00ff00", "#ff8800", "#ff0055",
+    "#3388ff", "#ffcc00", "#cc00ff", "#ffffff", "#66ffcc", "#aaaaaa",
+]
 
 
 # ----------------------------------------------------------------------
@@ -146,8 +170,7 @@ class SerialReaderThread(QThread):
 # VENTANA PRINCIPAL
 # ----------------------------------------------------------------------
 class MainApp(QMainWindow, Ui_MainWindow):
-    MAG_KEY = {"v": "tension", "i": "corriente", "p": "potencia"}
-    MAG_LETTER = {"v": "V", "i": "I", "p": "P"}
+    # Las series se identifican por clave: voltage, current, power, eficiencia, ...
     def __init__(self):
         super().__init__()
         self.setupUi(self)
@@ -167,6 +190,8 @@ class MainApp(QMainWindow, Ui_MainWindow):
         }
         self.btnSeleccionarCarpeta.clicked.connect(self.seleccionar_carpeta)
         self.sensors_data = {}
+        self.axis_units = []        # unidad asignada a cada eje Y (None = libre)
+        self._color_i = 0           # contador de colores para series nuevas
 
         # Terminal retro
         self.textEdit.setStyleSheet(
@@ -411,41 +436,32 @@ class MainApp(QMainWindow, Ui_MainWindow):
 
         self.graph_widget = self.layout_plots
 
-
         if self.graph_widget is None:
             print("ERROR: No se encontró ningún PlotWidget en la interfaz de Qt Designer.")
             return
 
-        # 2. Identificar el SeriesSelector creado por Qt Designer
+        # Selector de series (árbol) creado por Qt Designer
         self.selector = self.containerSelector
 
-        # Resto de la configuración de ejes...
         self.graph_widget.setTitle("Telemetría de Sensores - Tiempo Real")
         self.graph_widget.setBackground("#0c0c0c")
         self.graph_widget.showGrid(x=True, y=True, alpha=0.3)
         self.graph_widget.setLabel("bottom", "Tiempo", units="s")
         self.graph_widget.addLegend(offset=(10, 10))
 
-        # Eje Principal (Izquierda) -> Tensión
-        self.graph_widget.setLabel("left", "Tensión", units="V", color="#00ffff")
-
-        # Eje Adicional 1 (Derecha) -> Corriente
+        # Eje 0 (izquierda): el del PlotItem.
+        # Ejes 1 y 2 (derecha): ViewBox propios con eje a la derecha.
         self.vb2 = pg.ViewBox()
         self.graph_widget.plotItem.scene().addItem(self.vb2)
         axis2 = pg.AxisItem("right")
         self.graph_widget.plotItem.layout.addItem(axis2, 2, 3)
         axis2.linkToView(self.vb2)
-        axis2.setLabel("Corriente", units="mA", color="#ffff00")
-        self.axis_i = axis2
 
-        # Eje Adicional 2 (Derecha exterior) -> Potencia
         self.vb3 = pg.ViewBox()
         self.graph_widget.plotItem.scene().addItem(self.vb3)
         axis3 = pg.AxisItem("right")
         self.graph_widget.plotItem.layout.addItem(axis3, 2, 4)
         axis3.linkToView(self.vb3)
-        axis3.setLabel("Potencia", units="mW", color="#ff00ff")
-        self.axis_p = axis3
 
         # Sincronización X entre ViewBoxes
         self.vb2.setXLink(self.graph_widget.plotItem.vb)
@@ -455,7 +471,6 @@ class MainApp(QMainWindow, Ui_MainWindow):
         self.graph_widget.enableAutoRange(axis=pg.ViewBox.YAxis, enable=True)
         self.vb2.enableAutoRange(axis=pg.ViewBox.YAxis, enable=True)
         self.vb3.enableAutoRange(axis=pg.ViewBox.YAxis, enable=True)
-
 
         def update_views():
             rect = self.graph_widget.plotItem.vb.sceneBoundingRect()
@@ -468,17 +483,24 @@ class MainApp(QMainWindow, Ui_MainWindow):
         self.graph_widget.plotItem.vb.sigResized.connect(update_views)
         update_views()
 
+        # Ejes Y por posición: la unidad de cada serie decide en cuál se dibuja
+        self.axis_views = [self.graph_widget.plotItem.vb, self.vb2, self.vb3]
+        self.axis_items = [self.graph_widget.getAxis("left"), axis2, axis3]
+        for ax in self.axis_items:
+            ax.enableAutoSIPrefix(False)     # la unidad ya viene en la etiqueta
+
         if self.selector:
             self.selector.changed.connect(self.on_series_toggled)
-            self.selector.remove_requested.connect(self.remove_sensor)   
+            self.selector.remove_requested.connect(self.remove_sensor)
+        self._update_axes()
             
     @Slot(int, float, float, float, float)
     def store_sensor_data(self, sensor_id, t, v1, v2, v3):
         s = self._get_or_create_sensor(sensor_id)
         s["time"].append(t)
-        s["tension"].append(v1)
-        s["corriente"].append(v2)
-        s["potencia"].append(v3)
+        s["series"]["voltage"]["data"].append(v1)
+        s["series"]["current"]["data"].append(v2)
+        s["series"]["power"]["data"].append(v3)
 
         # Si la grabación está activa, escribir en el CSV del sensor correspondiente
         if self.grabando:
@@ -506,111 +528,153 @@ class MainApp(QMainWindow, Ui_MainWindow):
                 print(f"Error guardando muestra del sensor {sensor_id}: {e}")
 
 
-    def _get_or_create_sensor(self, sensor_id, suffix=None, colors=None,
-                          static=False, label=None, only=None):
-        if sensor_id not in self.sensors_data:
-            color_palette = {
-                0: ("#00ffff", "#ffff00", "#ff00ff"),
-                1: ("#00ff00", "#ff8800", "#ff0055"),
-                2: ("#3388ff", "#ffcc00", "#cc00ff"),
+    def _pick_color(self, sensor_id, key):
+        legacy = LEGACY_COLORS.get(sensor_id, {}).get(key)
+        if legacy:
+            return legacy
+        color = EXTRA_COLORS[self._color_i % len(EXTRA_COLORS)]
+        self._color_i += 1
+        return color
+
+    def _add_curve(self, curve, slot):
+        if slot == 0:
+            self.graph_widget.addItem(curve)
+        else:
+            self.axis_views[slot].addItem(curve)
+
+    def _remove_curve(self, curve, slot):
+        if slot == 0:
+            self.graph_widget.removeItem(curve)
+        else:
+            self.axis_views[slot].removeItem(curve)
+
+    def _get_or_create_sensor(self, sensor_id, suffix=None, static=False,
+                              label=None, series=None, title=None, expr=None):
+        """Crea (una sola vez) el sensor con sus series.
+
+        series : lista de (clave, nombre, unidad). Por defecto V/I/P de la ESP32.
+        label  : nombre de leyenda para todas sus series (series generadas).
+        title  : encabezado del grupo en el selector.
+        expr   : expresión que generó la serie (para nombrar operandos).
+        """
+        if sensor_id in self.sensors_data:
+            return self.sensors_data[sensor_id]
+
+        series = series or LIVE_SERIES
+        style_cfg = self.sensor_styles.get(
+            sensor_id, {"style": Qt.SolidLine, "suffix": f"S{sensor_id}"}
+        )
+        line_style = style_cfg["style"]
+        suffix = suffix or style_cfg["suffix"]
+
+        s = {
+            "time": deque(maxlen=10000),
+            "series": {},
+            "static": static,
+            "expr": expr,
+        }
+        rows = []
+        for key, name, unit in series:
+            text = f"{name} [{unit}]" if unit else name
+            legend_name = label or f"{text} - {suffix}"
+            color = self._pick_color(sensor_id, key)
+            pen = pg.mkPen(color=color, width=2, style=line_style)
+            # connect="finite": los NaN (p. ej. división por cero) dejan un hueco
+            curve = pg.PlotCurveItem(pen=pen, name=legend_name, connect="finite")
+            slot = axis_slot(unit, self.axis_units)
+            self._add_curve(curve, slot)
+            s["series"][key] = {
+                "name": name,
+                "unit": unit,
+                "data": deque(maxlen=10000),
+                "curve": curve,
+                "slot": slot,
+                "legend": legend_name,
+                "color": color,
             }
-            c_v, c_i, c_p = colors or color_palette.get(
-                sensor_id, ("#ffffff", "#aaaaaa", "#777777")
-            )
+            rows.append((key, text))
 
-            style_cfg = self.sensor_styles.get(
-                sensor_id, {"style": Qt.SolidLine, "suffix": f"S{sensor_id}"}
-            )
-            line_style = style_cfg["style"]
-            suffix = suffix or style_cfg["suffix"]
+        self.sensors_data[sensor_id] = s
 
-            names = {
-                "v": f"Tensión - {suffix}",
-                "i": f"Corriente - {suffix}",
-                "p": f"Potencia - {suffix}",
-            }
-            if label:
-                names = {m: label for m in ("v", "i", "p")}
-    
-
-            pen_tension = pg.mkPen(color=c_v, width=2, style=line_style)
-            pen_corriente = pg.mkPen(color=c_i, width=2, style=line_style)
-            pen_potencia = pg.mkPen(color=c_p, width=2, style=line_style)
-
-            curve_v = self.graph_widget.plot(pen=pen_tension, name=names["v"])
-            curve_i = pg.PlotCurveItem(pen=pen_corriente, name=names["i"])
-            self.vb2.addItem(curve_i)
-            curve_p = pg.PlotCurveItem(pen=pen_potencia, name=names["p"])
-            self.vb3.addItem(curve_p)
-
-            self.sensors_data[sensor_id] = {
-                "time": deque(maxlen=10000),
-                "tension": deque(maxlen=10000),
-                "corriente": deque(maxlen=10000),
-                "potencia": deque(maxlen=10000),
-                "curves": {"v": curve_v, "i": curve_i, "p": curve_p},
-                "names": names,
-                "static": static,
-            }
-
-            self.selector.add_sensor(sensor_id, label=label, only=only)
-            for m in ("v", "i", "p"):
-                self.apply_series_visibility(sensor_id, m)
-            self.refresh_math_operands()
-
-        return self.sensors_data[sensor_id]
+        self.selector.add_sensor(
+            sensor_id, label=title or label or f"S{sensor_id}", series=rows
+        )
+        for key in s["series"]:
+            self.apply_series_visibility(sensor_id, key)
+        self._update_axes()
+        self.refresh_math_operands()
+        return s
 
     @Slot(int, str, bool)
-    def on_series_toggled(self, sensor_id, mag, visible):
-        self.apply_series_visibility(sensor_id, mag)
- 
-    def apply_series_visibility(self, sensor_id, mag):
+    def on_series_toggled(self, sensor_id, key, visible):
+        self.apply_series_visibility(sensor_id, key)
+
+    def apply_series_visibility(self, sensor_id, key):
         """Muestra/oculta una serie y sincroniza leyenda y ejes."""
         s = self.sensors_data.get(sensor_id)
-        if s is None:
+        if s is None or key not in s["series"]:
             return
-        curve = s["curves"][mag]
+        ser = s["series"][key]
+        curve = ser["curve"]
         legend = self.graph_widget.plotItem.legend
-        visible = self.selector.is_visible(sensor_id, mag)
- 
+        visible = self.selector.is_visible(sensor_id, key)
+
         curve.setVisible(visible)
         legend.removeItem(curve)                  # evita entradas duplicadas
         if visible:
-            legend.addItem(curve, s["names"][mag])
-        self._update_axes_visibility()
+            legend.addItem(curve, ser["legend"])
+        self._update_axes()
+
     @Slot(int)
     def remove_sensor(self, sensor_id):
         s = self.sensors_data.pop(sensor_id, None)
         if s is None:
             return
 
-        c = s["curves"]
         legend = self.graph_widget.plotItem.legend
+        for ser in s["series"].values():
+            self._remove_curve(ser["curve"], ser["slot"])
+            if legend:
+                legend.removeItem(ser["curve"])
 
-        self.graph_widget.removeItem(c["v"])
-        self.vb2.removeItem(c["i"])
-        self.vb3.removeItem(c["p"])
-        if legend:
-            for curve in c.values():
-                legend.removeItem(curve)
+        # Libera los ejes que quedaron sin series
+        used = {ser["slot"] for t in self.sensors_data.values()
+                for ser in t["series"].values()}
+        for i in range(len(self.axis_units)):
+            if i not in used:
+                self.axis_units[i] = None
 
         self.selector.remove_sensor(sensor_id)
         self.refresh_math_operands()
-        self._update_axes_visibility()
+        self._update_axes()
         self.statusbar.showMessage(f"Serie {sensor_id} eliminada")
 
-        
-    def _update_axes_visibility(self):
-        """Oculta el eje de una magnitud si no hay ninguna serie visible."""
-        axes = {
-            "v": self.graph_widget.getAxis("left"),
-            "i": self.axis_i,
-            "p": self.axis_p,
-        }
-        for mag, axis in axes.items():
-            axis.setVisible(
-                any(self.selector.is_visible(sid, mag) for sid in self.sensors_data)
+    def _update_axes(self):
+        """Visibilidad, rótulo y color de cada eje Y según las series que usa."""
+        for i, axis in enumerate(self.axis_items):
+            visibles, todas = [], []
+            for sid, s in self.sensors_data.items():
+                for key, ser in s["series"].items():
+                    if ser["slot"] != i:
+                        continue
+                    todas.append(ser)
+                    if self.selector.is_visible(sid, key):
+                        visibles.append(ser)
+
+            axis.setVisible(bool(visibles) or i == 0)
+            shown = visibles or todas
+            if not shown:
+                axis.showLabel(False)
+                continue
+            names = list(dict.fromkeys(x["name"] for x in shown))
+            units = list(dict.fromkeys(x["unit"] for x in shown if x["unit"]))
+            text = " / ".join(names[:3]) + ("…" if len(names) > 3 else "")
+            axis.setLabel(
+                text=text,
+                units=" / ".join(units) or None,
+                color=shown[0]["color"],
             )
+            axis.showLabel(True)
 
  
     def on_muestras_changed(self):
@@ -630,9 +694,8 @@ class MainApp(QMainWindow, Ui_MainWindow):
                 for s in self.sensors_data.values():
                     if s.get("static"): continue
                     s["time"] = deque(s["time"], maxlen=self.buffer_size)
-                    s["tension"] = deque(s["tension"], maxlen=self.buffer_size)
-                    s["corriente"] = deque(s["corriente"], maxlen=self.buffer_size)
-                    s["potencia"] = deque(s["potencia"], maxlen=self.buffer_size)
+                    for ser in s["series"].values():
+                        ser["data"] = deque(ser["data"], maxlen=self.buffer_size)
 
                 self.update_plot()
                 self.statusbar.showMessage(
@@ -665,11 +728,9 @@ class MainApp(QMainWindow, Ui_MainWindow):
             has_data = True
  
             times = list(s["time"])[-self.buffer_size:]
-            series = {"v": s["tension"], "i": s["corriente"], "p": s["potencia"]}
- 
-            for mag, buf in series.items():
-                if self.selector.is_visible(s_id, mag):
-                    s["curves"][mag].setData(times, list(buf)[-self.buffer_size:])
+            for key, ser in s["series"].items():
+                if self.selector.is_visible(s_id, key):
+                    ser["curve"].setData(times, list(ser["data"])[-self.buffer_size:])
  
             if len(times) > 0:
                 global_t_min = min(global_t_min, times[0])
@@ -916,79 +977,53 @@ class MainApp(QMainWindow, Ui_MainWindow):
             return
 
         next_id = 1000
+        loaded = 0
 
         for path in paths:
+            fname = os.path.basename(path)
             try:
-                with open(path, newline="", encoding="utf-8-sig") as f:
-                    sample = f.read(2048)
-                    f.seek(0)
-                    try:
-                        dialect = csv.Sniffer().sniff(sample, delimiters=",;")
-                    except csv.Error:
-                        dialect = csv.excel
-                    reader = csv.reader(f, dialect)
-                    header = [h.strip().lower() for h in next(reader)]
-                    rows = [r for r in reader if len(r) == len(header)]
+                data = read_csv(path)
             except Exception as e:
-                self.statusbar.showMessage(f"Error al leer {os.path.basename(path)}: {e}")
+                self.statusbar.showMessage(f"Error al leer {fname}: {e}")
                 continue
-
-            def find_col(keys, default):
-                for i, h in enumerate(header):
-                    if any(k in h for k in keys):
-                        return i
-                return default
-
-            col_t = find_col(("tiempo", "time"), 0)
-            col_i = find_col(("corriente", "current", "amp"), 1)
-            col_v = find_col(("tension", "volt"), 2)
-            col_p = find_col(("potencia", "power", "watt"), 3)
-
-            if max(col_t, col_i, col_v, col_p) >= len(header):
-                self.statusbar.showMessage(f"{os.path.basename(path)}: columnas insuficientes")
-                continue
-
-            try:
-                data = [[float(v.replace(",", ".")) for v in row] for row in rows]
-            except ValueError:
-                self.statusbar.showMessage(f"{os.path.basename(path)}: datos no numéricos")
-                continue
-
-            if not data:
-                continue
+            for w in data.warnings:
+                self.append_text(f"[CSV] {fname}: {w}\n")
 
             while next_id in self.sensors_data:
                 next_id += 1
 
+            base = os.path.splitext(fname)[0]
+            defs = [
+                (key, DISPLAY_NAME.get(key, col.name), col.unit)
+                for key, (col, _) in data.series.items()
+            ]
             s = self._get_or_create_sensor(
                 next_id,
-                suffix=os.path.splitext(os.path.basename(path))[0],
+                suffix=base,
                 static=True,
+                series=defs,
+                title=f"S{next_id} ({base})",
             )
-            s["time"] = deque((row[col_t] for row in data), maxlen=len(data))
-            s["corriente"] = deque((row[col_i] for row in data), maxlen=len(data))
-            s["tension"] = deque((row[col_v] for row in data), maxlen=len(data))
-            s["potencia"] = deque((row[col_p] for row in data), maxlen=len(data))
-
-            s["curves"]["v"].setData(list(s["time"]), list(s["tension"]))
-            s["curves"]["i"].setData(list(s["time"]), list(s["corriente"]))
-            s["curves"]["p"].setData(list(s["time"]), list(s["potencia"]))
-
-            for m in ("v", "i", "p"):
-                self.apply_series_visibility(next_id, m)
+            n = len(data.time)
+            s["time"] = deque(data.time.tolist(), maxlen=n)
+            for key, (_, y) in data.series.items():
+                ser = s["series"][key]
+                ser["data"] = deque(y.tolist(), maxlen=n)
+                ser["curve"].setData(data.time, y)
 
             next_id += 1
+            loaded += 1
 
         self.graph_widget.autoRange()
-        self.statusbar.showMessage(f"{len(paths)} archivo(s) cargado(s)")
+        self.statusbar.showMessage(f"{loaded} de {len(paths)} archivo(s) cargado(s)")
 
-    def operand_label(self, sid, mag):
+    def operand_label(self, sid, key):
         s = self.sensors_data[sid]
         if s.get("expr"):                      # serie generada
             return f"({s['expr']})"
-        return f"{self.MAG_LETTER[mag]}(S{sid})"
+        letter = MAG_LETTER.get(key) or s["series"][key]["name"]
+        return f"{letter}(S{sid})"
 
-    @Slot()
     def refresh_math_operands(self, *_):
         sel = self.selector.checked()
         if sel != self._math_prev_sel:
@@ -1018,27 +1053,37 @@ class MainApp(QMainWindow, Ui_MainWindow):
             return
         if self._math_swapped:
             sel = sel[::-1]
-        (sa, ma), (sb, mb) = sel
+        (sa, ka), (sb, kb) = sel
         A, B = self.sensors_data[sa], self.sensors_data[sb]
-        ta = np.asarray(A["time"], float)
-        ya = np.asarray(A[self.MAG_KEY[ma]], float)
-        yb = np.asarray(B[self.MAG_KEY[mb]], float)
+        ser_a, ser_b = A["series"][ka], B["series"][kb]
+        ya = np.asarray(ser_a["data"], float)
+        yb = np.asarray(ser_b["data"], float)
         if len(ya) == 0 or len(yb) == 0:
             self.statusbar.showMessage("Alguna de las series no tiene datos")
             return
 
         n, y = apply_op(op, ya, yb)             # sin alinear tiempos (por ahora)
-        ta = ta[:n]
+        ta = np.asarray(A["time"], float)[:n]
 
-        name = f"{self.operand_label(sa, ma)}{OPS[op][0]}{self.operand_label(sb, mb)}"
-        generic = not (op in ("sum", "sub") and ma == mb)
-        self._math_result = {"t": ta, "y": y, "mag": ma, "name": name, "generic": generic}
+        unit = result_unit(op, ser_a["unit"], ser_b["unit"])
+        same = op in ("sum", "sub") and ka == kb       # conserva la magnitud
+        name = f"{self.operand_label(sa, ka)}{OPS[op][0]}{self.operand_label(sb, kb)}"
+        self._math_result = {
+            "t": ta,
+            "y": y,
+            "unit": unit,
+            "name": name,
+            "key": ka if same else "result",
+            "rname": ser_a["name"] if same else "Resultado",
+        }
 
         self.lineEditNombreSerie.setText(name)
         for w in (self.lineEditNombreSerie, self.btnMathMostrar, self.btnMathGuardarCSV):
             w.setEnabled(True)
-        self.statusbar.showMessage(f"Calculado: {name} ({n} puntos)")
-        
+        msg = f"Calculado: {name} [{unit or 'adim.'}] ({n} puntos)"
+        warn = unit_warning(op, ser_a["unit"], ser_b["unit"])
+        self.statusbar.showMessage(msg + (f" - {warn}" if warn else ""))
+
     def show_math_result(self):
         r = self._math_result
         if r is None:
@@ -1047,13 +1092,19 @@ class MainApp(QMainWindow, Ui_MainWindow):
         sid = 1000
         while sid in self.sensors_data:
             sid += 1
-        s = self._get_or_create_sensor(sid, label=name, only=r["mag"], static=True)
+        s = self._get_or_create_sensor(
+            sid,
+            static=True,
+            label=name,
+            title=name,
+            expr=name,
+            series=[(r["key"], r["rname"], r["unit"])],
+        )
         n = len(r["y"])
         s["time"] = deque(r["t"].tolist(), maxlen=n)
-        s[self.MAG_KEY[r["mag"]]] = deque(r["y"].tolist(), maxlen=n)
-        s["expr"] = name
-        s["generic"] = r["generic"]
-        s["curves"][r["mag"]].setData(r["t"], r["y"])
+        ser = s["series"][r["key"]]
+        ser["data"] = deque(r["y"].tolist(), maxlen=n)
+        ser["curve"].setData(r["t"], r["y"])
         self.graph_widget.autoRange()
         self.statusbar.showMessage(f"Serie '{name}' agregada")
 
@@ -1068,14 +1119,15 @@ class MainApp(QMainWindow, Ui_MainWindow):
             "CSV (*.csv)")
         if not path:
             return
-        col = {"v": 1, "i": 2, "p": 3}[r["mag"]]
+        # Encabezado "nombre [unidad]": load_csv_files lo relee con su unidad
+        head = name.replace("[", "(").replace("]", ")")
+        if r["unit"]:
+            head = f"{head} [{r['unit']}]"
         with open(path, "w", newline="", encoding="utf-8") as f:
             w = csv.writer(f, delimiter=";")
-            w.writerow(["Tiempo_s", "Tension_V", "Corriente_mA", "Potencia_mW"])
+            w.writerow(["Tiempo [s]", head])
             for t, y in zip(r["t"], r["y"]):
-                row = [f"{t:.3f}", "nan", "nan", "nan"]
-                row[col] = f"{y:.6g}"
-                w.writerow(row)
+                w.writerow([f"{t:.3f}", "nan" if np.isnan(y) else f"{y:.6g}"])
         self.statusbar.showMessage(f"Guardado: {path}")
         
     def send_data(self):
