@@ -16,6 +16,7 @@ from series_model import read_csv, axis_slot
 from PySide6.QtCore import QThread, Signal, Slot, QTimer, Qt
 from PySide6.QtGui import QTextCursor
 from PySide6.QtWidgets import QSplitter        # sumar al import existente
+from PySide6.QtGui import QTextCursor   # o PyQt según lo que uses
 
 from series_selector import SeriesSelector
 
@@ -198,10 +199,12 @@ class MainApp(QMainWindow, Ui_MainWindow):
             "QTextEdit { background-color: #0d0d0d; color: #00ff00; font-family: Consolas, 'Courier New', monospace; font-size: 11pt; }"
         )
 
-        # Emulador de terminal (pyte)
-        self.screen = pyte.Screen(80, 24)            # columnas, filas (como TeraTerm)
+
+        # Emulador de terminal (pyte) con scrollback
+        self.screen = pyte.HistoryScreen(80, 24, history=2000, ratio=0.5)
         self.vt_stream = pyte.Stream(self.screen)
         self.reset_terminal()
+
 
         self.textEdit.setLineWrapMode(QTextEdit.LineWrapMode.NoWrap)
         self.textEdit.setReadOnly(True)
@@ -831,32 +834,29 @@ class MainApp(QMainWindow, Ui_MainWindow):
     def append_text(self, text):
         self.vt_stream.feed(text)
 
+    def _line_to_str(self, line):
+        # Las filas del historial son diccionarios columna -> Char
+        return "".join(line[x].data for x in range(self.screen.columns)).rstrip()
+
     def render_terminal(self):
-        if not self.screen.dirty:              # nada cambió, no redibujar
+        if not self.screen.dirty:
             return
         self.screen.dirty.clear()
-        self.textEdit.setPlainText("\n".join(self.screen.display))
 
+        sb = self.textEdit.verticalScrollBar()
+        at_bottom = sb.value() >= sb.maximum() - 4
+        prev = sb.value()
 
-    def get_curve_data(self):
-        data = []
+        lines = [self._line_to_str(l) for l in self.screen.history.top]
+        # Solo hasta la fila del cursor: descarta las filas vacías de abajo
+        lines += [l.rstrip() for l in self.screen.display[:self.screen.cursor.y + 1]]
+        self.textEdit.setPlainText("\n".join(lines))
 
-        for row in range(self.tableCurva.rowCount()):
-
-            tiempo = self.tableCurva.item(row, 0)
-            valor = self.tableCurva.item(row, 1)
-            tipo = self.tableCurva.cellWidget(row, 2)
-
-            if tiempo is None or valor is None or tipo is None:
-                raise ValueError(f"Fila {row + 1} incompleta")
-
-            tiempo = int(tiempo.text())
-            valor = int(valor.text())
-            tipo = tipo.currentText()
-
-            data.append((tiempo, valor, tipo))
-
-        return data    
+        if at_bottom:
+            self.textEdit.moveCursor(QTextCursor.End)   # fuerza el layout y va al final real
+            self.textEdit.ensureCursorVisible()
+        else:
+            sb.setValue(prev)  
 
     def validate_curve_data(self, data):
 
