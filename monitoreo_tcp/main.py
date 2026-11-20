@@ -29,6 +29,9 @@ from PySide6.QtWidgets import (
     QComboBox,
     QFileDialog,
     QTextEdit, 
+    QLabel,
+    QCheckBox,
+    QPushButton,
 )
 
 from interfaz_ui import Ui_MainWindow
@@ -71,7 +74,7 @@ EXTRA_COLORS = [
 # ----------------------------------------------------------------------
 class SerialReaderThread(QThread):
     data_received = Signal(str)
-    parsed_data_received = Signal(int, float, float, float, float)
+    parsed_data_received = Signal(int, float, float, float, float, float)
     error_occurred = Signal(str)
 
     def __init__(self, serial_port):
@@ -98,21 +101,21 @@ class SerialReaderThread(QThread):
         if "*" not in line_str:
             return
         parts = line_str.split("*")[0].split(",")
-        # [0]=tipo, [1]=ts_ms, [2]=I_mA, [3]=V, [4]=shunt_mV, [5]=P_mW, [6]=pin
+        # [0]=tipo, [1]=ts_ms, [2]=I_mA, [3]=V, [4]=duty_%, [5]=P_mW, [6]=pin
         if len(parts) < 7:
             return
         try:
             time_sec    = float(parts[1]) / 1000.0
             i_corriente = float(parts[2])
             v_tension   = float(parts[3])
-            # parts[4] = shunt (mV): no se grafica
+            duty        = float(parts[4])
             p_potencia  = float(parts[5])
 
             pin = parts[6].strip()
             sensor_id = int(pin) if pin.isdigit() else 0
 
             self.parsed_data_received.emit(
-                sensor_id, time_sec, v_tension, i_corriente, p_potencia
+                sensor_id, time_sec, v_tension, i_corriente, p_potencia, duty
             )
         except ValueError:
             pass
@@ -257,6 +260,7 @@ class MainApp(QMainWindow, Ui_MainWindow):
         self.btnIniciar.clicked.connect(self.toggle_connection)
         self.pushButton_2.clicked.connect(self.send_data)
         self.btnCargarArchivo.clicked.connect(self.load_csv_files)
+        self._setup_x_axis_tools()
         if self.input_send_widget:
             self.input_send_widget.returnPressed.connect(self.send_data)
 
@@ -442,6 +446,7 @@ class MainApp(QMainWindow, Ui_MainWindow):
             else:
                 self.btn_pause_widget.setText("Pausar")
                 self.statusbar.showMessage("Gráfico en tiempo real")
+                self._reset_x_axis()
 
     def _setup_graph(self):
         """Configura los ejes y la visualización del PlotWidget que ya existe en la UI."""
@@ -507,8 +512,8 @@ class MainApp(QMainWindow, Ui_MainWindow):
             self.selector.remove_requested.connect(self.remove_sensor)
         self._update_axes()
             
-    @Slot(int, float, float, float, float)
-    def store_sensor_data(self, sensor_id, t, v1, v2, v3):
+    @Slot(int, float, float, float, float, float)
+    def store_sensor_data(self, sensor_id, t, v1, v2, v3, duty):
         s = self._get_or_create_sensor(sensor_id)
         s["time"].append(t)
         s["series"]["voltage"]["data"].append(v1)
@@ -527,7 +532,7 @@ class MainApp(QMainWindow, Ui_MainWindow):
                     writer = csv.writer(f, delimiter=";")
                     
                     # Encabezado optimizado (sin Sensor_ID)
-                    writer.writerow(["Tiempo_s", "Tension_V", "Corriente_mA", "Potencia_mW"])
+                    writer.writerow(["Tiempo_s", "Tension_V", "Corriente_mA", "Potencia_mW", "Duty_%"])
                     f.flush()
                     
                     self.archivos_csv[sensor_id] = f
@@ -535,7 +540,7 @@ class MainApp(QMainWindow, Ui_MainWindow):
                     self.append_text(f"[REC] Creado archivo para Sensor {sensor_id}: {nombre_archivo}\n")
 
                 # Escribir la muestra en el archivo específico del sensor
-                self.escritores_csv[sensor_id].writerow([f"{t:.3f}", f"{v1:.3f}", f"{v2:.3f}", f"{v3:.3f}"])
+                self.escritores_csv[sensor_id].writerow([f"{t:.3f}", f"{v1:.3f}", f"{v2:.3f}", f"{v3:.3f}", f"{duty:.3f}"])
                 
             except Exception as e:
                 print(f"Error guardando muestra del sensor {sensor_id}: {e}")
@@ -616,6 +621,7 @@ class MainApp(QMainWindow, Ui_MainWindow):
             self.apply_series_visibility(sensor_id, key)
         self._update_axes()
         self.refresh_math_operands()
+        self.refresh_x_axis_options()
         return s
 
     @Slot(int, str, bool)
@@ -659,6 +665,7 @@ class MainApp(QMainWindow, Ui_MainWindow):
 
         self.selector.remove_sensor(sensor_id)
         self.refresh_math_operands()
+        self.refresh_x_axis_options()
         self._update_axes()
         self.statusbar.showMessage(f"Serie {sensor_id} eliminada")
 
@@ -723,7 +730,7 @@ class MainApp(QMainWindow, Ui_MainWindow):
 
     def update_plot(self):
         """Actualiza solo las curvas visibles con las últimas buffer_size muestras."""
-        if self.is_paused or not self.sensors_data:
+        if self.is_paused or self._x_sel is not None or self._x_rel or not self.sensors_data:
             return
  
         global_t_min = float("inf")
@@ -781,6 +788,7 @@ class MainApp(QMainWindow, Ui_MainWindow):
         try:
             for sid in [k for k, v in self.sensors_data.items() if not v.get("static")]:
                 self.remove_sensor(sid)
+            self._reset_x_axis()
             self.reset_terminal()
             self.serial_port = serial.Serial(port_name, baud_rate, timeout=0.1)
  
@@ -848,16 +856,38 @@ class MainApp(QMainWindow, Ui_MainWindow):
         prev = sb.value()
 
         lines = [self._line_to_str(l) for l in self.screen.history.top]
-        # Solo hasta la fila del cursor: descarta las filas vacías de abajo
-        lines += [l.rstrip() for l in self.screen.display[:self.screen.cursor.y + 1]]
+        lines += [l.rstrip() for l in self.screen.display]   # pantalla completa, sin cortar en el cursor
+        while lines and not lines[-1]:                       # solo quita filas vacías del final
+            lines.pop()
+
         self.textEdit.setPlainText("\n".join(lines))
 
+        # Mover el scroll después de que Qt termine el layout, sin tocar el cursor de texto
         if at_bottom:
-            self.textEdit.moveCursor(QTextCursor.End)   # fuerza el layout y va al final real
-            self.textEdit.ensureCursorVisible()
+            QTimer.singleShot(0, lambda: sb.setValue(sb.maximum()))
         else:
-            sb.setValue(prev)  
+            sb.setValue(prev)
 
+    def get_curve_data(self):
+        data = []
+
+        for row in range(self.tableCurva.rowCount()):
+
+            tiempo = self.tableCurva.item(row, 0)
+            valor = self.tableCurva.item(row, 1)
+            tipo = self.tableCurva.cellWidget(row, 2)
+
+            if tiempo is None or valor is None or tipo is None:
+                raise ValueError(f"Fila {row + 1} incompleta")
+
+            tiempo = int(tiempo.text())
+            valor = int(valor.text())
+            tipo = tipo.currentText()
+
+            data.append((tiempo, valor, tipo))
+
+        return data
+        
     def validate_curve_data(self, data):
 
         if not data:
@@ -1024,8 +1054,186 @@ class MainApp(QMainWindow, Ui_MainWindow):
             next_id += 1
             loaded += 1
 
+        self.apply_x_axis()
         self.graph_widget.autoRange()
         self.statusbar.showMessage(f"{loaded} de {len(paths)} archivo(s) cargado(s)")
+
+    # -- Eje X elegible y CSV combinado (solo con el tiempo real detenido) --
+    def _setup_x_axis_tools(self):
+        """Agrega al panel de archivos: selector de eje X, alinear inicios y
+        boton para guardar un CSV con las series tildadas."""
+        self._x_sel = None          # None = tiempo; si no (sensor_id, clave)
+        self._x_rel = False         # True = cada serie con t relativo a su inicio
+        lay = self.horizontalLayout_6
+        lay.addWidget(QLabel("Eje X:"))
+        self.comboEjeX = QComboBox()
+        self.comboEjeX.setMinimumWidth(220)
+        self.comboEjeX.setToolTip("Magnitud del eje X (solo con el gráfico en tiempo real detenido)")
+        lay.addWidget(self.comboEjeX)
+        self.chkAlinearInicio = QCheckBox("Alinear inicios (t=0)")
+        self.chkAlinearInicio.setToolTip(
+            "Cada serie usa su tiempo relativo a su primera muestra.\n"
+            "Usar con archivos grabados en sesiones distintas.")
+        lay.addWidget(self.chkAlinearInicio)
+        self.btnGuardarCombinado = QPushButton("Guardar CSV combinado")
+        self.btnGuardarCombinado.setToolTip("Guarda en un CSV las series tildadas con el eje X elegido")
+        lay.addWidget(self.btnGuardarCombinado)
+        self.refresh_x_axis_options()
+        self.comboEjeX.currentIndexChanged.connect(self.apply_x_axis)
+        self.chkAlinearInicio.toggled.connect(self.apply_x_axis)
+        self.btnGuardarCombinado.clicked.connect(self.save_combined_csv)
+
+    def _realtime_stopped(self):
+        connected = self.serial_port is not None and self.serial_port.is_open
+        return self.is_paused or not connected
+
+    def refresh_x_axis_options(self):
+        """Rearma la lista del eje X conservando la seleccion si sigue existiendo."""
+        combo = getattr(self, "comboEjeX", None)
+        if combo is None:
+            return
+        cur = combo.currentData()
+        combo.blockSignals(True)
+        combo.clear()
+        combo.addItem("Tiempo [s]", None)
+        idx = 0
+        for sid in sorted(self.sensors_data):
+            for key, ser in self.sensors_data[sid]["series"].items():
+                combo.addItem(f"S{sid}: {ser['legend']}", (sid, key))
+                if cur is not None and tuple(cur) == (sid, key):
+                    idx = combo.count() - 1
+        combo.setCurrentIndex(idx)
+        combo.blockSignals(False)
+        if cur is not None and idx == 0:
+            self.apply_x_axis()          # se quito la serie del eje X: vuelve a tiempo
+
+    def _reset_x_axis(self):
+        """Vuelve a eje X = tiempo absoluto (al reanudar o conectar)."""
+        if not hasattr(self, "comboEjeX"):
+            return
+        if self._x_sel is None and not self._x_rel:
+            return
+        for w in (self.comboEjeX, self.chkAlinearInicio):
+            w.blockSignals(True)
+        self.comboEjeX.setCurrentIndex(0)
+        self.chkAlinearInicio.setChecked(False)
+        for w in (self.comboEjeX, self.chkAlinearInicio):
+            w.blockSignals(False)
+        self.apply_x_axis()
+
+    def _series_xy(self, sid, key):
+        """(t, y) como arrays; t relativo a su inicio si 'Alinear inicios'."""
+        s = self.sensors_data[sid]
+        t = np.asarray(s["time"], float)
+        y = np.asarray(s["series"][key]["data"], float)
+        n = min(len(t), len(y))
+        t, y = t[:n], y[:n]
+        if n and self._x_rel:
+            t = t - t[0]
+        return t, y
+
+    @staticmethod
+    def _resample(t_src, y_src, t_dst):
+        """Interpolacion lineal de y_src(t_src) en t_dst; NaN fuera del rango comun."""
+        ok = np.isfinite(t_src) & np.isfinite(y_src)
+        t_src, y_src = t_src[ok], y_src[ok]
+        if len(t_src) < 2:
+            return np.full(len(t_dst), np.nan)
+        order = np.argsort(t_src, kind="stable")
+        t_src, y_src = t_src[order], y_src[order]
+        out = np.interp(t_dst, t_src, y_src)
+        eps = 1e-6                       # tolerancia de redondeo [s]
+        out[(t_dst < t_src[0] - eps) | (t_dst > t_src[-1] + eps)] = np.nan
+        return out
+
+    def apply_x_axis(self, *_):
+        """Redibuja todas las curvas contra el eje X elegido."""
+        sel = self.comboEjeX.currentData()
+        rel = self.chkAlinearInicio.isChecked()
+        if (sel is not None or rel) and not self._realtime_stopped():
+            self.statusbar.showMessage("Detené el gráfico en tiempo real para cambiar el eje X")
+            self._x_sel, self._x_rel = (0, ""), True     # fuerza el reset
+            self._reset_x_axis()
+            return
+        self._x_sel = tuple(sel) if sel is not None else None
+        self._x_rel = rel
+        bottom = self.graph_widget.getAxis("bottom")
+        sin_solape = []
+        if self._x_sel is None:
+            for sid, s in self.sensors_data.items():
+                for key, ser in s["series"].items():
+                    ser["curve"].setData(*self._series_xy(sid, key))
+            bottom.enableAutoSIPrefix(True)
+            self.graph_widget.setLabel("bottom", "Tiempo", units="s")
+        else:
+            xsid, xkey = self._x_sel
+            tx, x = self._series_xy(xsid, xkey)
+            for sid, s in self.sensors_data.items():
+                for key, ser in s["series"].items():
+                    t, y = self._series_xy(sid, key)
+                    xi = x[:len(y)] if sid == xsid else self._resample(tx, x, t)
+                    if len(xi) < len(y):
+                        y = y[:len(xi)]
+                    if len(y) and np.all(np.isnan(xi)):
+                        sin_solape.append(f"S{sid}")
+                    ser["curve"].setData(xi, y)
+            xs = self.sensors_data[xsid]["series"][xkey]
+            bottom.enableAutoSIPrefix(False)
+            self.graph_widget.setLabel("bottom", f"{xs['name']} (S{xsid})", units=xs["unit"] or None)
+        self.graph_widget.autoRange()
+        if sin_solape:
+            self.statusbar.showMessage(
+                "Sin solapamiento temporal con el eje X: " + ", ".join(dict.fromkeys(sin_solape))
+                + " (probá 'Alinear inicios')")
+
+    def save_combined_csv(self):
+        """CSV con las series tildadas (de uno o varios archivos) sobre una base
+        de tiempo comun: la de la serie del eje X, o la de la primera tildada.
+        Las demas se interpolan linealmente; fuera del rango comun quedan en nan."""
+        if not self._realtime_stopped():
+            self.statusbar.showMessage("Detené el gráfico en tiempo real para guardar el CSV combinado")
+            return
+        sel = [tuple(o) for o in self.selector.checked() if tuple(o) != self._x_sel]
+        if not sel:
+            self.statusbar.showMessage("Tildá al menos una serie para guardar")
+            return
+        cols = ([self._x_sel] if self._x_sel is not None else []) + sel
+        base = cols[0]
+        t_base, _ = self._series_xy(*base)
+        heads, data, sin_solape = ["Tiempo [s]"], [t_base], []
+        for sid, key in cols:
+            t, y = self._series_xy(sid, key)
+            if sid == base[0]:
+                v = np.full(len(t_base), np.nan)
+                v[:min(len(y), len(t_base))] = y[:len(t_base)]
+            else:
+                v = self._resample(t, y, t_base)
+                if np.all(np.isnan(v)):
+                    sin_solape.append(f"S{sid}")
+            data.append(v)
+            ser = self.sensors_data[sid]["series"][key]
+            tag = ser["legend"].split(" - ", 1)[1] if " - " in ser["legend"] else ""
+            head = f"{ser['name']} S{sid}" + (f" {tag}" if tag else "")
+            head = head.replace("[", "(").replace("]", ")").replace(";", ",")
+            heads.append(f"{head} [{ser['unit']}]" if ser["unit"] else head)
+
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Guardar CSV combinado", os.path.join(self.carpeta_destino, "combinado.csv"),
+            "CSV (*.csv)")
+        if not path:
+            return
+        rows = np.column_stack(data)
+        with open(path, "w", newline="", encoding="utf-8") as f:
+            w = csv.writer(f, delimiter=";")
+            w.writerow(heads)
+            for r in rows:
+                if np.all(np.isnan(r[1:])):
+                    continue                 # fila sin ningun dato
+                w.writerow([f"{r[0]:.9g}"] + ["nan" if np.isnan(v) else f"{v:.6g}" for v in r[1:]])
+        msg = f"Guardado: {path}"
+        if sin_solape:
+            msg += " - sin solapamiento temporal: " + ", ".join(dict.fromkeys(sin_solape))
+        self.statusbar.showMessage(msg)
 
     def operand_label(self, sid, key):
         s = self.sensors_data[sid]
@@ -1115,6 +1323,7 @@ class MainApp(QMainWindow, Ui_MainWindow):
         ser = s["series"][r["key"]]
         ser["data"] = deque(r["y"].tolist(), maxlen=n)
         ser["curve"].setData(r["t"], r["y"])
+        self.apply_x_axis()
         self.graph_widget.autoRange()
         self.statusbar.showMessage(f"Serie '{name}' agregada")
 
